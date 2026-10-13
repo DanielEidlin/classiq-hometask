@@ -32,4 +32,4 @@ strict = true
 ignore_missing_imports = true
 mypy_path = "tests/integration,packages/api/src,packages/common/src,packages/worker/src,packages/sweeper/src"
 explicit_package_bases = true
-files = ["packages/*/src", "packages/common/migrations", "packages/common/tests", "packages/api/tests", "tests"]
+files = ["packages/*/src", "packages/*/tests", "packages/common/migrations", "tests"]
