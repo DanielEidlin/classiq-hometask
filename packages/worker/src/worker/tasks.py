@@ -81,8 +81,9 @@ def _fail(task_id: uuid.UUID, code: ErrorCode, message: str) -> bool:
 @app.task(name=PROCESS_TASK_NAME)  # type: ignore[untyped-decorator]
 def process(task_id: str) -> None:
     task_log = log.bind(task_id=task_id)
+    parsed_id = uuid.UUID(task_id)
 
-    claimed = _claim(uuid.UUID(task_id))
+    claimed = _claim(parsed_id)
     if claimed is None:
         task_log.info("task_skipped", reason="not pending")
         return
@@ -92,17 +93,15 @@ def process(task_id: str) -> None:
 
     match outcome:
         case SimulationCompleted(counts=counts):
-            if _complete(uuid.UUID(task_id), counts):
+            if _complete(parsed_id, counts):
                 task_log.info("task_completed")
                 return
-        case SimulationFailed(code=code, message=message, traceback=None):
-            if _fail(uuid.UUID(task_id), code, message):
-                task_log.info("task_failed", error_code=code, message=message)
-                return
         case SimulationFailed(code=code, message=message, traceback=traceback):
-            # A traceback means the simulator raised: a fault to investigate, not just a bad circuit.
-            if _fail(uuid.UUID(task_id), code, message):
-                task_log.error("task_failed", error_code=code, message=message, traceback=traceback)
+            if _fail(parsed_id, code, message):
+                # A traceback means something raised: a fault to investigate, not just a bad
+                # circuit. It crossed the process boundary as text, so it's logged as a field.
+                log_failure = task_log.info if traceback is None else task_log.error
+                log_failure("task_failed", error_code=code, message=message, traceback=traceback)
                 return
         case _:
             assert_never(outcome)

@@ -2,8 +2,6 @@ import os
 import signal
 import sys
 
-import pytest
-
 from common.tasks import ErrorCode
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
 from worker.runner import SimulationLimits, classify_exit, run, run_in_child
@@ -28,7 +26,7 @@ def test_bell_circuit_returns_counts_over_00_and_11() -> None:
     assert isinstance(outcome, SimulationCompleted)
     # Subset, not equality: sampling can miss one of the two outcomes.
     assert set(outcome.counts) <= {"00", "11"}
-    assert sum(outcome.counts.values()) == 1024
+    assert sum(outcome.counts.values()) == LIMITS.shots
 
 
 def _failure(circuit: str, limits: SimulationLimits = LIMITS) -> SimulationFailed:

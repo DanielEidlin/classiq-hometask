@@ -8,6 +8,7 @@ but the supervising parent can kill the child on timeout and see how it ended.
 
 import os
 import signal
+import traceback
 from collections.abc import Callable
 
 import billiard
@@ -28,8 +29,6 @@ class SimulationLimits(BaseModel, frozen=True):
 
 
 class ChildExit(BaseModel):
-    """How the child process ended."""
-
     outcome: SimulationOutcome | None
     timed_out: bool
     exitcode: int | None
@@ -72,7 +71,10 @@ def run_in_child(
             outcome = receiver.recv()
         except EOFError:
             outcome = None
-        child.join()
+        # The outcome is in; a child that then hangs while exiting must not hold the task.
+        child.join(STOP_GRACE_SECONDS)
+        if child.is_alive():
+            _stop(child)
         return ChildExit(outcome=outcome, timed_out=False, exitcode=child.exitcode)
     finally:
         receiver.close()
@@ -101,7 +103,16 @@ def classify_exit(child_exit: ChildExit, limits: SimulationLimits) -> Simulation
 
 
 def run(circuit: str, limits: SimulationLimits) -> SimulationOutcome:
-    child_exit = run_in_child(
-        simulate, (circuit, limits.shots, limits.max_memory_mb), limits.timeout_seconds
-    )
+    try:
+        child_exit = run_in_child(
+            simulate, (circuit, limits.shots, limits.max_memory_mb), limits.timeout_seconds
+        )
+    except Exception as exc:
+        # The supervision itself failed (the child couldn't start, or its outcome couldn't be
+        # read). Recording a failure beats leaving the task pending forever.
+        return SimulationFailed(
+            code=ErrorCode.SIMULATION_ERROR,
+            message=f"Simulation could not be run: {type(exc).__name__}.",
+            traceback=traceback.format_exc(),
+        )
     return classify_exit(child_exit, limits)
