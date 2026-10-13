@@ -1,1 +1,1 @@
-"""Sweeper service: publishes stored tasks that were never published. Not implemented yet."""
+"""Sweeper service: publishes stored tasks that were never published (decision 14)."""
