@@ -50,7 +50,7 @@ async def _is_published(engine: AsyncEngine, task_id: uuid.UUID) -> bool:
     return published
 
 
-def _sweeper(engine: AsyncEngine, publisher: AsyncMock) -> Sweeper:
+def _build_sweeper(engine: AsyncEngine, publisher: AsyncMock) -> Sweeper:
     return Sweeper(engine, publisher, grace=GRACE, stale_after=STALE_AFTER)
 
 
@@ -59,7 +59,7 @@ async def test_unpublished_task_older_than_the_grace_period_is_published(
 ) -> None:
     task_id = await _insert_task(engine, age=GRACE * 2)
 
-    await _sweeper(engine, publisher).sweep()
+    await _build_sweeper(engine, publisher).sweep()
 
     assert publisher.publish.await_args_list == [call(task_id)]
     assert await _is_published(engine, task_id)
@@ -70,7 +70,7 @@ async def test_task_younger_than_the_grace_period_is_not_touched(
 ) -> None:
     task_id = await _insert_task(engine, age=GRACE / 2)
 
-    await _sweeper(engine, publisher).sweep()
+    await _build_sweeper(engine, publisher).sweep()
 
     publisher.publish.assert_not_awaited()
     assert not await _is_published(engine, task_id)
@@ -88,7 +88,7 @@ async def test_two_sweepers_at_once_publish_each_task_once(
     publisher.publish.side_effect = _slow_publish
 
     await asyncio.gather(
-        _sweeper(engine, publisher).sweep(), _sweeper(engine, publisher).sweep()
+        _build_sweeper(engine, publisher).sweep(), _build_sweeper(engine, publisher).sweep()
     )
 
     published_ids = [published.args[0] for published in publisher.publish.await_args_list]
@@ -102,13 +102,13 @@ async def test_rejected_publish_leaves_the_task_for_the_next_pass(
     accepted_id = await _insert_task(engine, age=GRACE * 2)
     publisher.publish.side_effect = functools.partial(_reject_only, rejected_id)
 
-    await _sweeper(engine, publisher).sweep()
+    await _build_sweeper(engine, publisher).sweep()
 
     assert not await _is_published(engine, rejected_id)
     assert await _is_published(engine, accepted_id)
 
     publisher.publish.side_effect = None
-    await _sweeper(engine, publisher).sweep()
+    await _build_sweeper(engine, publisher).sweep()
 
     assert await _is_published(engine, rejected_id)
 
@@ -126,7 +126,7 @@ async def test_stale_pending_task_is_logged_and_not_republished(
     await _insert_task(engine, age=STALE_AFTER / 2, published=True)
 
     with structlog.testing.capture_logs() as logs:
-        await _sweeper(engine, publisher).sweep()
+        await _build_sweeper(engine, publisher).sweep()
 
     stale_warnings = [entry for entry in logs if entry["event"] == "stale_task"]
     assert [entry["task_id"] for entry in stale_warnings] == [str(stale_id)]

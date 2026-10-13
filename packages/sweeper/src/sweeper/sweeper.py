@@ -16,7 +16,6 @@ log = structlog.get_logger()
 
 
 async def _lock_unpublished(connection: AsyncConnection, grace: timedelta) -> list[uuid.UUID]:
-    """Lock the unpublished tasks older than `grace`, skipping any another sweeper holds."""
     query = (
         sa.select(tasks.c.id)
         .where(tasks.c.published.is_(False), tasks.c.created_at < sa.func.now() - grace)

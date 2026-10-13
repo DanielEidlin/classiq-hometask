@@ -28,7 +28,7 @@ class ComposeStack:
         compose("start", service)
 
     def execute_sql(self, statement: str) -> None:
-        """Run a SQL statement in the stack's Postgres, through its own `psql`."""
+        # Postgres publishes no port to the host, so the statement runs through `psql` in its container.
         compose(
             "exec", "-T", "postgres",
             "psql", "--username", "tasks", "--dbname", "tasks", "-v", "ON_ERROR_STOP=1",
