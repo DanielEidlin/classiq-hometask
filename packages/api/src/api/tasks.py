@@ -9,16 +9,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from api.dependencies import ConnectionDep, PublisherDep
+from api.dependencies import DbConnectionDep, PublisherDep
 from common.tasks import TaskStatus, tasks
 
 log = structlog.get_logger()
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
-
-TASK_SUBMITTED_MESSAGE = "Task submitted successfully."
-TASK_PENDING_MESSAGE = "Task is still in progress."
-TASK_NOT_FOUND_MESSAGE = "Task not found."
 
 
 class SubmitTaskRequest(BaseModel):
@@ -27,12 +23,12 @@ class SubmitTaskRequest(BaseModel):
 
 class SubmitTaskResponse(BaseModel):
     task_id: uuid.UUID
-    message: str
+    message: Literal["Task submitted successfully."] = "Task submitted successfully."
 
 
 class PendingTaskResponse(BaseModel):
     status: Literal["pending"] = "pending"
-    message: str = TASK_PENDING_MESSAGE
+    message: Literal["Task is still in progress."] = "Task is still in progress."
 
 
 class CompletedTaskResponse(BaseModel):
@@ -77,7 +73,7 @@ async def _fetch_outcome(connection: AsyncConnection, task_id: uuid.UUID) -> Tas
 
 @router.post("", status_code=202)
 async def submit_task(
-    body: SubmitTaskRequest, connection: ConnectionDep, publisher: PublisherDep
+    body: SubmitTaskRequest, connection: DbConnectionDep, publisher: PublisherDep
 ) -> SubmitTaskResponse:
     task_id = uuid.uuid4()
     async with connection.begin():
@@ -86,21 +82,21 @@ async def submit_task(
     async with connection.begin():
         await connection.execute(tasks.update().where(tasks.c.id == task_id).values(published=True))
     log.info("task_accepted", task_id=str(task_id))
-    return SubmitTaskResponse(task_id=task_id, message=TASK_SUBMITTED_MESSAGE)
+    return SubmitTaskResponse(task_id=task_id)
 
 
 @router.get("/{task_id}")
 async def get_task(
-    task_id: str, connection: ConnectionDep
+    task_id: str, connection: DbConnectionDep
 ) -> PendingTaskResponse | CompletedTaskResponse | FailedTaskResponse:
     try:
         parsed_id = uuid.UUID(task_id)
     except ValueError:
-        raise HTTPException(404, TASK_NOT_FOUND_MESSAGE) from None
+        raise HTTPException(404, "Task not found.") from None
 
     outcome = await _fetch_outcome(connection, parsed_id)
     if outcome is None:
-        raise HTTPException(404, TASK_NOT_FOUND_MESSAGE)
+        raise HTTPException(404, "Task not found.")
     match outcome:
         case PendingOutcome():
             return PendingTaskResponse()

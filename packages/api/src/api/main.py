@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.exceptions import HTTPException
 
 from api import health, tasks
+from api.dependencies import AppState
 from common.log import configure_logging
 from common.publisher import TaskPublisher
 
@@ -18,14 +19,14 @@ log = structlog.get_logger()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[AppState]:
     """Open the database engine and the broker connection for the app's lifetime."""
     configure_logging("api")
-    app.state.engine = create_async_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
-    app.state.publisher = await TaskPublisher.connect(os.environ["RABBITMQ_URL"])
-    yield
-    await app.state.publisher.close()
-    await app.state.engine.dispose()
+    engine = create_async_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
+    publisher = await TaskPublisher.connect(os.environ["RABBITMQ_URL"])
+    yield {"engine": engine, "publisher": publisher}
+    await publisher.close()
+    await engine.dispose()
 
 
 app = FastAPI(title="Quantum Circuit Execution", lifespan=lifespan)
