@@ -7,6 +7,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_NAME = "classiq-hometask-test"
 API_PORT = os.environ.get("TEST_API_PORT", "18000")
+WAIT_TIMEOUT_SECONDS = "300"
 
 
 def compose(*args: str) -> None:
@@ -26,3 +27,8 @@ class ComposeStack:
 
     def start(self, service: str) -> None:
         compose("start", service)
+
+    def restart(self, service: str) -> None:
+        # `restart` returns once the container is running, not once it is healthy.
+        compose("restart", service)
+        compose("up", "--detach", "--wait", "--wait-timeout", WAIT_TIMEOUT_SECONDS, "--no-deps", service)
