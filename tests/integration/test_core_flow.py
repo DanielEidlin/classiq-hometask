@@ -4,9 +4,12 @@ import uuid
 import httpx
 import pytest
 
-from stack import Stack
+from stack import ComposeStack
 
 pytestmark = pytest.mark.integration
+
+# The worker's default shot count; compose.yaml doesn't override it.
+SHOTS = 1024
 
 BELL_CIRCUIT = """
 OPENQASM 3.0;
@@ -33,10 +36,10 @@ def poll_until_final(api: httpx.Client, task_id: str, deadline_seconds: float = 
 
 
 def test_bell_circuit_is_pending_then_completed_with_counts(
-    api: httpx.Client, stack: Stack
+    api: httpx.Client, compose_stack: ComposeStack
 ) -> None:
     # With no worker running, the task cannot leave `pending` before it is polled.
-    stack.stop("worker")
+    compose_stack.stop("worker")
     try:
         response = api.post("/tasks", json={"qc": BELL_CIRCUIT})
 
@@ -50,14 +53,15 @@ def test_bell_circuit_is_pending_then_completed_with_counts(
         assert pending.status_code == 200
         assert pending.json() == {"status": "pending", "message": "Task is still in progress."}
     finally:
-        stack.start("worker")
+        compose_stack.start("worker")
 
     final = poll_until_final(api, task_id)
     assert final["status"] == "completed"
     counts = final["result"]
     assert isinstance(counts, dict)
+    # Subset, not equality: sampling can miss one of the two outcomes.
     assert set(counts) <= {"00", "11"}
-    assert sum(counts.values()) == 1024
+    assert sum(counts.values()) == SHOTS
 
 
 def test_unknown_task_id_returns_404(api: httpx.Client) -> None:

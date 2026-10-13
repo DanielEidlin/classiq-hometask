@@ -18,7 +18,7 @@ app.conf.update(
     task_reject_on_worker_lost=True,
     task_ignore_result=True,
     worker_prefetch_multiplier=1,
-    worker_concurrency=1,
+    worker_concurrency=int(os.environ.get("WORKER_CONCURRENCY", "1")),
     broker_connection_retry_on_startup=True,
     # structlog writes JSON lines to stdout itself; Celery would wrap each one in its own log line.
     worker_redirect_stdouts=False,

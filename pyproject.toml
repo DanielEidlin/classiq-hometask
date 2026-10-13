@@ -31,4 +31,4 @@ python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 mypy_path = "tests/integration"
-files = ["packages/*/src", "packages/common/migrations", "packages/common/tests", "tests"]
+files = ["packages/*/src", "packages/common/migrations", "packages/common/tests", "packages/api/tests", "tests"]

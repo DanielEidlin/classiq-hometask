@@ -3,11 +3,19 @@
 Logs are JSON lines on stdout by default. Set `LOG_FORMAT=console` for human-readable output.
 """
 
+import functools
 import logging
 import os
 import sys
 
 import structlog
+
+
+def _add_service(
+    service: str, logger: object, method_name: str, event_dict: structlog.typing.EventDict
+) -> structlog.typing.EventDict:
+    event_dict["service"] = service
+    return event_dict
 
 
 def configure_logging(service: str) -> None:
@@ -17,16 +25,10 @@ def configure_logging(service: str) -> None:
     else:
         renderer = structlog.processors.JSONRenderer()
 
-    def add_service(
-        logger: object, method_name: str, event_dict: structlog.typing.EventDict
-    ) -> structlog.typing.EventDict:
-        event_dict.setdefault("service", service)
-        return event_dict
-
     structlog.configure(
         processors=[
             structlog.contextvars.merge_contextvars,
-            add_service,
+            functools.partial(_add_service, service),
             structlog.processors.add_log_level,
             structlog.processors.TimeStamper(fmt="iso", utc=True),
             structlog.processors.format_exc_info,
