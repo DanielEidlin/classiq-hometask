@@ -87,7 +87,7 @@ A sweeper service republishes any task still unpublished after a grace period, w
 | Circuit raises during simulation | Aer error, no counts produced | `failed`, no retry | `SIMULATION_ERROR` |
 | Circuit exceeds time limit | Non-terminating loop | `failed`, no retry | `TIMEOUT` |
 | Simulation killed by the OS | Memory use exceeds the container limit despite the simulator's own check | `failed`, no retry | `OUT_OF_MEMORY` |
-| Transient infrastructure error | Postgres briefly unreachable | Retried with exponential backoff, selected by exception type | (none unless retries run out) |
+| Database unreachable | Postgres down while saving | Retried in place, then the message is returned to the queue (decision 18) | (none; the outcome cannot be recorded) |
 | Whole worker lost | Container or host crash | Redelivered by RabbitMQ; capped at `MAX_ATTEMPTS` (default 3) | `WORKER_LOST` |
 
 Each Celery task runs the simulation in a supervised child process with a hard timeout. The supervising task survives every circuit-caused failure (exception, timeout, kill), so it can always classify the failure and record it. On failure the task row stores an error code and a human-readable message. The API returns only the message, preserving the specified response shape; the code is stored for querying and logged. Stack traces go to logs only.
@@ -228,7 +228,7 @@ All values are configurable through environment variables and the Compose file.
 
 ### 14. The sweeper is a dedicated service
 
-**Decision.** A separate `sweeper` service, one replica by default, closes the dual-write gap from decision 4. Every `SWEEP_INTERVAL_SECONDS` (10 s) it selects tasks that are still unpublished and older than `SWEEP_GRACE_SECONDS` (30 s) using `FOR UPDATE SKIP LOCKED`, publishes them with the same publisher the API uses, and marks them published. If a publish is rejected (for example, the queue is full), the task stays unpublished and is retried on the next pass. The service reports the time of its last successful pass through its health check.
+**Decision.** A separate `sweeper` service, one replica by default, closes the dual-write gap from decision 4. Every `SWEEP_INTERVAL_SECONDS` (10 s) it selects tasks that are still unpublished and older than `SWEEP_GRACE_SECONDS` (30 s) using `FOR UPDATE SKIP LOCKED`, publishes them with the same publisher the API uses, and marks them published. If a publish is rejected (for example, the queue is full), the task stays unpublished and is retried on the next pass. The service reports the time of its last successful pass through its health check. It also logs a warning for tasks stuck in `pending` (decision 18).
 
 **Rationale.**
 
@@ -288,6 +288,22 @@ All values are configurable through environment variables and the Compose file.
 
 - **202** is the standard code for a request accepted for processing that has not completed, which is exactly what task submission is.
 - **One error shape.** FastAPI's default validation response (422 with a `detail` array) differs from every other error this API returns. Converting it lets clients handle all errors the same way.
+
+### 18. Tasks stuck in `pending`
+
+**Decision.** A task can only be stuck if its message is gone or held indefinitely while its row is still `pending`. Worker death is already covered by redelivery (decision 5); three further paths are handled:
+
+1. **Database unreachable when recording an outcome.** The worker retries the write in place with exponential backoff (capped at 30 s between tries), holding its one message and taking no new tasks. If the database is still unreachable after `DB_OUTAGE_GIVE_UP_SECONDS` (240 s), it returns the message to the queue unacknowledged (Celery's `Reject(requeue=True)`) for a later attempt. Every failed write is logged as an error with the task ID.
+2. **A worker alive but stuck** (for example, blocked on a call that never returns). RabbitMQ's `consumer_timeout` is set to 5 minutes, so a delivery held longer than that is returned to the queue. The worker's database calls have their own timeouts.
+3. **A message lost despite durable, persistent, confirmed publishing** (disk failure, a purged queue, misconfiguration). The sweeper logs a `stale_task` warning for any task `pending` longer than `STALE_TASK_SECONDS` (600 s). It does not republish them.
+
+**Rationale.**
+
+- **The failure can't be recorded when the database is down.** Marking the task `failed` would itself require the database. Acknowledging the message without recording an outcome would leave the task `pending` forever, so the message is returned rather than dropped. Celery's default retry behaviour has exactly this flaw: once `max_retries` runs out, the failed task's message is acknowledged.
+- **Retry in place rather than Celery's `retry()`.** `retry()` with unlimited retries would also be correct, but it schedules delayed messages that the worker holds in memory while continuing to fetch more. During an outage each worker would pull the whole queue into memory, and every task would retry the database simultaneously when it recovered. Retrying in place limits each worker to one held task and one connection attempt at a time, leaving the rest of the queue in RabbitMQ.
+- **Give up before `consumer_timeout`.** Returning the message after 240 s keeps the worker under RabbitMQ's 5-minute limit, so the hand-back is deliberate rather than a forced channel closure. The re-run simulation is harmless (decision 10).
+- **The consumer timeout exceeds the 60 s task timeout** with ample margin, so it fires only for genuinely stuck workers. RabbitMQ's default of 30 minutes would leave such a task waiting too long.
+- **Stale tasks are detected, not republished.** Under heavy load a task legitimately waiting in a long queue looks the same as one whose message was lost. Republishing would create duplicate runs whose attempts could falsely fail a healthy task with `WORKER_LOST`. It would also mask message loss, the failure the warning exists to expose, and invalidate the broker-restart test's assumption (decision 13).
 
 ## Future work
 
