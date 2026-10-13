@@ -114,8 +114,10 @@ Worker loss is covered by Celery's `acks_late` and `task_reject_on_worker_lost`:
 
 **Decision.** Python 3.12, with dependencies managed by `uv` and locked in `uv.lock`. The API and the worker are separate deployments with separate concurrency models:
 
-- **API:** FastAPI with `async` endpoints, an async Postgres driver, and `aio-pika` for publishing. It does only I/O.
-- **Worker:** Celery (synchronous), a synchronous Postgres driver, and Qiskit/Aer. It does all CPU-heavy work: parsing, validation and simulation.
+- **API:** FastAPI with `async` endpoints, SQLAlchemy's async engine, and `aio-pika` for publishing. It does only I/O.
+- **Worker:** Celery (synchronous), SQLAlchemy's sync engine, and Qiskit/Aer. It does all CPU-heavy work: parsing, validation and simulation.
+
+Both services reach Postgres through SQLAlchemy Core (query building over a shared table definition, without the ORM) and the psycopg 3 driver, using the same `postgresql+psycopg://` URL.
 
 **Rationale.**
 
@@ -124,6 +126,10 @@ Worker loss is covered by Celery's `acks_late` and `task_reject_on_worker_lost`:
 - **Sync worker.** Celery tasks are synchronous, and the worker's cost is dominated by simulation CPU, so async I/O would gain nothing there.
 - **Python 3.12** is fully supported by every dependency. Newer versions risk missing prebuilt wheels for Qiskit Aer, which would mean compiling C++ during the Docker build.
 - **`uv`** gives fast, reproducible installs from a lock file, keeping Docker builds deterministic.
+- **SQLAlchemy Core.** Alembic (decision 8) is built on SQLAlchemy, so the dependency is already present, and the `tasks` table is defined once in `common` and used by the API, worker, sweeper and migrations alike. Core expresses the conditional single-statement updates of decision 10 (`UPDATE … WHERE status = 'pending' RETURNING …`) directly.
+- **Not the ORM.** An ORM maps rows to Python objects and tracks their changes. Its natural pattern, load an object, modify it, commit, is a read-then-write that would reintroduce the races decision 10 avoids, and with one table it has no relationships to manage. SQLModel was ruled out for the same reason and because it couples the stored row to the API's response models, which deliberately differ (decision 2).
+- **Not raw SQL strings.** They would save no dependency, since Alembic needs SQLAlchemy anyway, and column names would be repeated as strings across services instead of coming from the shared table.
+- **psycopg 3 over asyncpg.** psycopg 3 supports both sync and async, so the API and worker share one driver, one URL scheme and one set of type conversions (JSONB, UUID, enums). asyncpg is faster but async-only, which would mean a second driver for the worker. Its speed would not show here: simulation dominates the cost, and status polls are single-row primary-key lookups. Switching later only changes the API's URL to `postgresql+asyncpg://`; the queries stay the same.
 
 ### 8. Repository layout and shared contracts
 
