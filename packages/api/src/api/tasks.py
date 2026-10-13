@@ -1,7 +1,7 @@
 """Routes for submitting tasks and reading their outcomes."""
 
 import uuid
-from typing import Any
+from typing import Literal, assert_never
 
 import sqlalchemy as sa
 import structlog
@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from api.dependencies import ConnectionDep, PublisherDep
+from api.dependencies import DbConnectionDep, PublisherDep
 from common.tasks import TaskStatus, tasks
 
 log = structlog.get_logger()
@@ -23,6 +23,21 @@ class SubmitTaskRequest(BaseModel):
 
 class SubmitTaskResponse(BaseModel):
     task_id: uuid.UUID
+    message: str
+
+
+class PendingTaskResponse(BaseModel):
+    status: Literal["pending"] = "pending"
+    message: str = "Task is still in progress."
+
+
+class CompletedTaskResponse(BaseModel):
+    status: Literal["completed"] = "completed"
+    result: dict[str, int]
+
+
+class FailedTaskResponse(BaseModel):
+    status: Literal["error"] = "error"
     message: str
 
 
@@ -44,7 +59,7 @@ async def _fetch_outcome(connection: AsyncConnection, task_id: uuid.UUID) -> Tas
 
 @router.post("", status_code=202)
 async def submit_task(
-    body: SubmitTaskRequest, connection: ConnectionDep, publisher: PublisherDep
+    body: SubmitTaskRequest, connection: DbConnectionDep, publisher: PublisherDep
 ) -> SubmitTaskResponse:
     task_id = uuid.uuid4()
     async with connection.begin():
@@ -57,7 +72,9 @@ async def submit_task(
 
 
 @router.get("/{task_id}")
-async def get_task(task_id: str, connection: ConnectionDep) -> dict[str, Any]:
+async def get_task(
+    task_id: str, connection: DbConnectionDep
+) -> PendingTaskResponse | CompletedTaskResponse | FailedTaskResponse:
     try:
         parsed_id = uuid.UUID(task_id)
     except ValueError:
@@ -66,8 +83,14 @@ async def get_task(task_id: str, connection: ConnectionDep) -> dict[str, Any]:
     outcome = await _fetch_outcome(connection, parsed_id)
     if outcome is None:
         raise HTTPException(404, "Task not found.")
-    if outcome.status == TaskStatus.COMPLETED:
-        return {"status": "completed", "result": outcome.result}
-    if outcome.status == TaskStatus.FAILED:
-        return {"status": "error", "message": outcome.error_message}
-    return {"status": "pending", "message": "Task is still in progress."}
+    match outcome.status:
+        case TaskStatus.PENDING:
+            return PendingTaskResponse()
+        case TaskStatus.COMPLETED:
+            assert outcome.result is not None, "a completed task always has counts"
+            return CompletedTaskResponse(result=outcome.result)
+        case TaskStatus.FAILED:
+            assert outcome.error_message is not None, "a failed task always has a reason"
+            return FailedTaskResponse(message=outcome.error_message)
+        case _:
+            assert_never(outcome.status)

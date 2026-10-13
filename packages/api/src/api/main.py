@@ -19,10 +19,7 @@ log = structlog.get_logger()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Open the database engine and the broker connection for the app's lifetime.
-
-    The dependencies in `api.dependencies` hand them to the routes.
-    """
+    """Open the database engine and the broker connection for the app's lifetime."""
     configure_logging("api")
     app.state.engine = create_async_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
     app.state.publisher = await TaskPublisher.connect(os.environ["RABBITMQ_URL"])

@@ -16,17 +16,12 @@ from worker.app import app
 log = structlog.get_logger()
 
 
+SHOTS = int(os.environ.get("SHOTS", "1024"))
+
+
 @functools.cache
 def _engine() -> sa.Engine:
-    # Celery runs tasks in child processes that it forks from the main worker process. A
-    # connection pool must not be shared across a fork: parent and child would read and
-    # write the same sockets. Building the engine on first use, inside the child, rather
-    # than at import, in the parent, gives each child process its own pool.
     return sa.create_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
-
-
-def _shots() -> int:
-    return int(os.environ.get("SHOTS", "1024"))
 
 
 class ClaimedTask(BaseModel):
@@ -74,7 +69,7 @@ def process(task_id: str) -> None:
         return
     task_log.info("task_started", attempt=claimed.attempts)
 
-    counts = simulation.run(claimed.circuit, shots=_shots())
+    counts = simulation.run(claimed.circuit, shots=SHOTS)
 
     if _complete(uuid.UUID(task_id), counts):
         task_log.info("task_completed")
