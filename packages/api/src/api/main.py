@@ -1,12 +1,12 @@
 """The HTTP API: accepts tasks and reports their outcomes."""
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.exceptions import HTTPException
 
@@ -48,3 +48,21 @@ async def render_error(request: Request, exc: HTTPException) -> JSONResponse:
         content={"status": "error", "message": exc.detail},
         headers=exc.headers,
     )
+
+
+@app.middleware("http")
+async def render_unexpected_error(
+    request: Request, call_next: Callable[[Request], Awaitable[Response]]
+) -> Response:
+    """Turn an unhandled exception into a 500 in the error shape, logging its traceback.
+
+    A middleware rather than an `Exception` handler: Starlette re-raises after running such
+    a handler, so Uvicorn would log the traceback a second time, as plain text.
+    """
+    try:
+        return await call_next(request)
+    except Exception:
+        log.exception("request_crashed", method=request.method, path=request.url.path)
+        return JSONResponse(
+            status_code=500, content={"status": "error", "message": "Internal server error."}
+        )

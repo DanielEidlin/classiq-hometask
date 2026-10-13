@@ -1,20 +1,24 @@
 """Routes for submitting tasks and reading their outcomes."""
 
 import uuid
-from typing import Literal, assert_never
+from typing import Annotated, Literal, assert_never
 
 import sqlalchemy as sa
 import structlog
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncConnection
 
-from api.dependencies import DbConnectionDep, PublisherDep
+from api.dependencies import ConnectionDep, PublisherDep
 from common.tasks import TaskStatus, tasks
 
 log = structlog.get_logger()
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
+
+TASK_SUBMITTED_MESSAGE = "Task submitted successfully."
+TASK_PENDING_MESSAGE = "Task is still in progress."
+TASK_NOT_FOUND_MESSAGE = "Task not found."
 
 
 class SubmitTaskRequest(BaseModel):
@@ -28,7 +32,7 @@ class SubmitTaskResponse(BaseModel):
 
 class PendingTaskResponse(BaseModel):
     status: Literal["pending"] = "pending"
-    message: str = "Task is still in progress."
+    message: str = TASK_PENDING_MESSAGE
 
 
 class CompletedTaskResponse(BaseModel):
@@ -41,12 +45,26 @@ class FailedTaskResponse(BaseModel):
     message: str
 
 
-class TaskOutcome(BaseModel):
-    """The stored state of a task: its status and, once final, its counts or failure reason."""
+class PendingOutcome(BaseModel):
+    status: Literal[TaskStatus.PENDING]
 
-    status: TaskStatus
-    result: dict[str, int] | None
-    error_message: str | None
+
+class CompletedOutcome(BaseModel):
+    status: Literal[TaskStatus.COMPLETED]
+    result: dict[str, int]
+
+
+class FailedOutcome(BaseModel):
+    status: Literal[TaskStatus.FAILED]
+    error_message: str
+
+
+# The stored state of a task. Validation picks the model by status, so a completed task
+# without counts, or a failed one without a reason, is rejected here rather than served.
+TaskOutcome = Annotated[
+    PendingOutcome | CompletedOutcome | FailedOutcome, Field(discriminator="status")
+]
+_task_outcome = TypeAdapter[TaskOutcome](TaskOutcome)
 
 
 async def _fetch_outcome(connection: AsyncConnection, task_id: uuid.UUID) -> TaskOutcome | None:
@@ -54,12 +72,12 @@ async def _fetch_outcome(connection: AsyncConnection, task_id: uuid.UUID) -> Tas
         tasks.c.id == task_id
     )
     row = (await connection.execute(query)).one_or_none()
-    return None if row is None else TaskOutcome.model_validate(row._mapping)
+    return None if row is None else _task_outcome.validate_python(dict(row._mapping))
 
 
 @router.post("", status_code=202)
 async def submit_task(
-    body: SubmitTaskRequest, connection: DbConnectionDep, publisher: PublisherDep
+    body: SubmitTaskRequest, connection: ConnectionDep, publisher: PublisherDep
 ) -> SubmitTaskResponse:
     task_id = uuid.uuid4()
     async with connection.begin():
@@ -68,29 +86,27 @@ async def submit_task(
     async with connection.begin():
         await connection.execute(tasks.update().where(tasks.c.id == task_id).values(published=True))
     log.info("task_accepted", task_id=str(task_id))
-    return SubmitTaskResponse(task_id=task_id, message="Task submitted successfully.")
+    return SubmitTaskResponse(task_id=task_id, message=TASK_SUBMITTED_MESSAGE)
 
 
 @router.get("/{task_id}")
 async def get_task(
-    task_id: str, connection: DbConnectionDep
+    task_id: str, connection: ConnectionDep
 ) -> PendingTaskResponse | CompletedTaskResponse | FailedTaskResponse:
     try:
         parsed_id = uuid.UUID(task_id)
     except ValueError:
-        raise HTTPException(404, "Task not found.") from None
+        raise HTTPException(404, TASK_NOT_FOUND_MESSAGE) from None
 
     outcome = await _fetch_outcome(connection, parsed_id)
     if outcome is None:
-        raise HTTPException(404, "Task not found.")
-    match outcome.status:
-        case TaskStatus.PENDING:
+        raise HTTPException(404, TASK_NOT_FOUND_MESSAGE)
+    match outcome:
+        case PendingOutcome():
             return PendingTaskResponse()
-        case TaskStatus.COMPLETED:
-            assert outcome.result is not None, "a completed task always has counts"
-            return CompletedTaskResponse(result=outcome.result)
-        case TaskStatus.FAILED:
-            assert outcome.error_message is not None, "a failed task always has a reason"
-            return FailedTaskResponse(message=outcome.error_message)
+        case CompletedOutcome(result=counts):
+            return CompletedTaskResponse(result=counts)
+        case FailedOutcome(error_message=reason):
+            return FailedTaskResponse(message=reason)
         case _:
-            assert_never(outcome.status)
+            assert_never(outcome)

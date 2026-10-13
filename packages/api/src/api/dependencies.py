@@ -29,7 +29,7 @@ async def get_db_connection(
         yield connection
 
 
-# Shorthands for declaring a dependency in a route's signature, e.g. `connection: DbConnectionDep`.
+# Shorthands for declaring a dependency in a route's signature, e.g. `connection: ConnectionDep`.
 EngineDep = Annotated[AsyncEngine, Depends(get_engine)]
 PublisherDep = Annotated[TaskPublisher, Depends(get_publisher)]
-DbConnectionDep = Annotated[AsyncConnection, Depends(get_db_connection)]
+ConnectionDep = Annotated[AsyncConnection, Depends(get_db_connection)]
