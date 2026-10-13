@@ -1,0 +1,10 @@
+**/.venv
+**/__pycache__
+**/*.pyc
+.git
+.idea
+.mypy_cache
+.pytest_cache
+docs
+tests
+packages/*/tests
