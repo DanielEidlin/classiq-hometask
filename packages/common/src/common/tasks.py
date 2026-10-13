@@ -31,7 +31,7 @@ tasks = sa.Table(
     "tasks",
     metadata,
     sa.Column("id", UUID(as_uuid=True), primary_key=True),
-    sa.Column("qc", sa.Text, nullable=False),
+    sa.Column("circuit", sa.Text, nullable=False),
     sa.Column(
         "status",
         sa.Enum(TaskStatus, name="task_status", values_callable=_values),

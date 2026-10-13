@@ -65,6 +65,7 @@ services:
     environment:
       <<: *app-environment
       SHOTS: ${SHOTS:-1024}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
     deploy:
       replicas: 2
     depends_on:

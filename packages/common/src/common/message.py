@@ -6,8 +6,6 @@ Celery worker consumes it natively, without the publishers depending on Celery.
 """
 
 import json
-import os
-import socket
 import uuid
 
 import aio_pika
@@ -19,7 +17,9 @@ TASK_QUEUE = "tasks"
 def encode_task_message(task_id: uuid.UUID) -> aio_pika.Message:
     """Build the protocol v2 message asking a worker to process `task_id`.
 
-    The Celery task ID is the task's own ID, so worker logs and the database share one key.
+    Only the headers the protocol marks as required are set; Celery treats the optional
+    ones (eta, expires, retries, time limits, ...) as absent. The Celery task ID is the
+    task's own ID, so worker logs and the database share one key.
     """
     celery_id = str(task_id)
     args = [str(task_id)]
@@ -31,19 +31,9 @@ def encode_task_message(task_id: uuid.UUID) -> aio_pika.Message:
             "lang": "py",
             "task": PROCESS_TASK_NAME,
             "id": celery_id,
-            "shadow": None,
-            "eta": None,
-            "expires": None,
-            "group": None,
-            "group_index": None,
-            "retries": 0,
-            "timelimit": [None, None],
             "root_id": celery_id,
             "parent_id": None,
-            "argsrepr": repr(tuple(args)),
-            "kwargsrepr": repr(kwargs),
-            "origin": f"{os.getpid()}@{socket.gethostname()}",
-            "ignore_result": True,
+            "group": None,
         },
         content_type="application/json",
         content_encoding="utf-8",

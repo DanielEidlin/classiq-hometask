@@ -18,8 +18,8 @@ def compose(*args: str) -> None:
     )
 
 
-class Stack:
-    """Controls services of the running stack, for tests that need to hold work back."""
+class ComposeStack:
+    """Stops and starts services of the running Compose stack, for tests that need to hold work back."""
 
     def stop(self, service: str) -> None:
         compose("stop", service)

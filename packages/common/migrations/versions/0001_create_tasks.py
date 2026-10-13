@@ -32,7 +32,7 @@ def upgrade() -> None:
     op.create_table(
         "tasks",
         sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-        sa.Column("qc", sa.Text, nullable=False),
+        sa.Column("circuit", sa.Text, nullable=False),
         sa.Column("status", task_status, nullable=False, server_default="pending"),
         sa.Column("published", sa.Boolean, nullable=False, server_default=sa.false()),
         sa.Column("attempts", sa.Integer, nullable=False, server_default="0"),
