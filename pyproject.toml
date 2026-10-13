@@ -19,7 +19,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["packages/common/tests", "tests"]
+testpaths = ["packages", "tests"]
 addopts = "--import-mode=importlib"
 pythonpath = ["tests/integration"]
 markers = [
