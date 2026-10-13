@@ -10,6 +10,8 @@ pytestmark = pytest.mark.integration
 
 # The worker's default shot count; compose.yaml doesn't override it.
 SHOTS = 1024
+# The API's default circuit size limit; compose.yaml doesn't override it.
+MAX_CIRCUIT_BYTES = 65536
 
 BELL_CIRCUIT = """
 OPENQASM 3.0;
@@ -69,6 +71,25 @@ def test_unknown_task_id_returns_404(api: httpx.Client) -> None:
 
     assert response.status_code == 404
     assert response.json() == {"status": "error", "message": "Task not found."}
+
+
+def test_malformed_body_returns_400(api: httpx.Client) -> None:
+    response = api.post("/tasks", json={"circuit": BELL_CIRCUIT})
+
+    assert response.status_code == 400
+    assert response.json() == {"status": "error", "message": "Field 'qc' is required."}
+
+
+def test_oversized_circuit_returns_413(api: httpx.Client) -> None:
+    oversized_circuit = BELL_CIRCUIT + " " * MAX_CIRCUIT_BYTES
+
+    response = api.post("/tasks", json={"qc": oversized_circuit})
+
+    assert response.status_code == 413
+    assert response.json() == {
+        "status": "error",
+        "message": f"Circuit is larger than the limit of {MAX_CIRCUIT_BYTES} bytes.",
+    }
 
 
 def test_health_is_ok_when_dependencies_are_reachable(api: httpx.Client) -> None:

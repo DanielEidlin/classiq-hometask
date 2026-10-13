@@ -1,5 +1,6 @@
 """Routes for submitting tasks and reading their outcomes."""
 
+import os
 import uuid
 from typing import Annotated, Literal, assert_never
 
@@ -16,9 +17,13 @@ log = structlog.get_logger()
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
+MAX_CIRCUIT_BYTES = int(os.environ.get("MAX_CIRCUIT_BYTES", "65536"))
+
 
 class SubmitTaskRequest(BaseModel):
-    quantum_circuit: str = Field(alias="qc", description="The circuit, as QASM3 text.")
+    quantum_circuit: str = Field(
+        alias="qc", min_length=1, description="The circuit, as QASM3 text."
+    )
 
 
 class SubmitTaskResponse(BaseModel):
@@ -75,6 +80,8 @@ async def _fetch_outcome(connection: AsyncConnection, task_id: uuid.UUID) -> Tas
 async def submit_task(
     body: SubmitTaskRequest, connection: DbConnectionDep, publisher: PublisherDep
 ) -> SubmitTaskResponse:
+    if len(body.quantum_circuit.encode("utf-8")) > MAX_CIRCUIT_BYTES:
+        raise HTTPException(413, f"Circuit is larger than the limit of {MAX_CIRCUIT_BYTES} bytes.")
     task_id = uuid.uuid4()
     async with connection.begin():
         await connection.execute(tasks.insert().values(id=task_id, circuit=body.quantum_circuit))
