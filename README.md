@@ -279,7 +279,7 @@ All values are configurable through environment variables and the Compose file.
 
 | Case | HTTP |
 |---|---|
-| Malformed body (not JSON, missing or non-string `qc`) | 400 |
+| Malformed body (not JSON, missing, non-string or empty `qc`) | 400 |
 | Unknown task ID | 404 |
 | Circuit larger than `MAX_CIRCUIT_BYTES` | 413 |
 | Queue full or broker unavailable | 503, with `Retry-After` |

@@ -37,19 +37,9 @@ def test_body_that_is_not_json_returns_400(client: TestClient) -> None:
     assert response.json() == {"status": "error", "message": "Request body is not valid JSON."}
 
 
-@pytest.mark.parametrize("body", [["OPENQASM 3.0;"], "OPENQASM 3.0;"])
+@pytest.mark.parametrize("body", [["OPENQASM 3.0;"], "OPENQASM 3.0;", None])
 def test_body_that_is_not_an_object_returns_400(client: TestClient, body: object) -> None:
     response = client.post("/tasks", json=body)
-
-    assert response.status_code == 400
-    assert response.json() == {
-        "status": "error",
-        "message": "Request body must be a JSON object.",
-    }
-
-
-def test_missing_body_returns_400(client: TestClient) -> None:
-    response = client.post("/tasks")
 
     assert response.status_code == 400
     assert response.json() == {

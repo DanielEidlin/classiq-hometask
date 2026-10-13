@@ -10,7 +10,7 @@ pytestmark = pytest.mark.integration
 
 # The worker's default shot count; compose.yaml doesn't override it.
 SHOTS = 1024
-# The API's default circuit size limit; compose.yaml doesn't override it.
+# The API's default circuit size limit, which compose.yaml passes through unless MAX_CIRCUIT_BYTES is set.
 MAX_CIRCUIT_BYTES = 65536
 
 BELL_CIRCUIT = """
