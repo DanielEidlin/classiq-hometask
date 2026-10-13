@@ -4,6 +4,8 @@ import uuid
 import httpx
 import pytest
 
+from stack import Stack
+
 pytestmark = pytest.mark.integration
 
 BELL_CIRCUIT = """
@@ -17,34 +19,40 @@ c = measure q;
 """
 
 
-def poll_until_final(api: httpx.Client, task_id: str, deadline_seconds: float = 120) -> list[dict[str, object]]:
-    """Poll the task until it leaves `pending`, returning every body observed."""
-    observed: list[dict[str, object]] = []
+def poll_until_final(api: httpx.Client, task_id: str, deadline_seconds: float = 120) -> dict[str, object]:
+    """Poll the task until it leaves `pending`, returning the final body."""
     deadline = time.monotonic() + deadline_seconds
     while time.monotonic() < deadline:
         response = api.get(f"/tasks/{task_id}")
         assert response.status_code == 200
-        body = response.json()
-        observed.append(body)
+        body: dict[str, object] = response.json()
         if body["status"] != "pending":
-            return observed
-        time.sleep(0.05)
+            return body
+        time.sleep(0.2)
     raise AssertionError(f"task {task_id} still pending after {deadline_seconds}s")
 
 
-def test_bell_circuit_is_pending_then_completed_with_counts(api: httpx.Client) -> None:
-    response = api.post("/tasks", json={"qc": BELL_CIRCUIT})
+def test_bell_circuit_is_pending_then_completed_with_counts(
+    api: httpx.Client, stack: Stack
+) -> None:
+    # With no worker running, the task cannot leave `pending` before it is polled.
+    stack.stop("worker")
+    try:
+        response = api.post("/tasks", json={"qc": BELL_CIRCUIT})
 
-    assert response.status_code == 202
-    body = response.json()
-    assert body["message"] == "Task submitted successfully."
-    task_id = body["task_id"]
-    assert uuid.UUID(task_id).version == 4
+        assert response.status_code == 202
+        body = response.json()
+        assert body["message"] == "Task submitted successfully."
+        task_id = body["task_id"]
+        assert uuid.UUID(task_id).version == 4
 
-    observed = poll_until_final(api, task_id)
+        pending = api.get(f"/tasks/{task_id}")
+        assert pending.status_code == 200
+        assert pending.json() == {"status": "pending", "message": "Task is still in progress."}
+    finally:
+        stack.start("worker")
 
-    assert observed[0] == {"status": "pending", "message": "Task is still in progress."}
-    final = observed[-1]
+    final = poll_until_final(api, task_id)
     assert final["status"] == "completed"
     counts = final["result"]
     assert isinstance(counts, dict)

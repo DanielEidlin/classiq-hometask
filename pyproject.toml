@@ -21,6 +21,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["packages/common/tests", "tests"]
 addopts = "--import-mode=importlib"
+pythonpath = ["tests/integration"]
 markers = [
     "integration: needs the full Docker Compose stack",
 ]
@@ -29,4 +30,5 @@ markers = [
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
+mypy_path = "tests/integration"
 files = ["packages/*/src", "packages/common/migrations", "packages/common/tests", "tests"]
