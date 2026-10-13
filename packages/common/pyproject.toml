@@ -1,0 +1,18 @@
+[project]
+name = "common"
+version = "0.1.0"
+description = "Contracts shared by the services: the task table, status and error codes, the task message, logging"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "aio-pika>=9.5",
+    "psycopg[binary]>=3.2",
+    "sqlalchemy>=2.0",
+    "structlog>=24.4",
+]
+
+[project.optional-dependencies]
+migrate = ["alembic>=1.14"]
+
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"

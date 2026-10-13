@@ -1,0 +1,32 @@
+[project]
+name = "classiq-hometask"
+version = "0.1.0"
+description = "Asynchronous quantum circuit execution service"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28",
+    "mypy>=1.13",
+    "pytest>=8.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["packages/common/tests", "tests"]
+addopts = "--import-mode=importlib"
+markers = [
+    "integration: needs the full Docker Compose stack",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+ignore_missing_imports = true
+files = ["packages/*/src", "packages/common/migrations", "packages/common/tests", "tests"]
