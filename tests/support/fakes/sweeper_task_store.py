@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
 
-from sweeper.abstractions import StaleTask
+from sweeper.domain.abstractions import StaleTask
 
 
 class FakeUnpublishedBatch:

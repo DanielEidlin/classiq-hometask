@@ -2,9 +2,9 @@
 
 import uuid
 
-from common.tasks import TaskStatus
-from worker.abstractions import DatabaseUnavailable, StartedAttempt
-from worker.outcomes import SimulationOutcome
+from common.domain.tasks import TaskStatus
+from worker.domain.abstractions import DatabaseUnavailable, StartedAttempt
+from worker.domain.outcomes import SimulationOutcome
 
 
 class FakeTaskStore:

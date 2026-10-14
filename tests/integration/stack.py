@@ -5,7 +5,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from common.task_queue import TASK_QUEUE
+from common.data.task_queue import TASK_QUEUE
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_NAME = "classiq-hometask-test"

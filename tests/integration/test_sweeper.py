@@ -7,7 +7,7 @@ import sqlalchemy as sa
 
 from api_client import poll_until_final
 from circuits import BELL_CIRCUIT
-from common.tasks import tasks
+from common.data.tables import tasks
 
 pytestmark = pytest.mark.integration
 

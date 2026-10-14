@@ -4,7 +4,7 @@ import pytest
 import sqlalchemy as sa
 from testcontainers.postgres import PostgresContainer
 
-from common.tasks import metadata
+from common.data.tables import metadata
 
 POSTGRES_IMAGE = "postgres:16-alpine"
 

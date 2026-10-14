@@ -2,8 +2,8 @@ import uuid
 
 from fastapi.testclient import TestClient
 
-from api.dependencies import get_task_store
 from api.main import INTERNAL_SERVER_ERROR_MESSAGE, app
+from api.presentation.dependencies import get_task_store
 from fakes.api_task_store import BrokenTaskStore
 
 

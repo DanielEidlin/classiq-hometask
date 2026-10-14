@@ -6,7 +6,7 @@ import sqlalchemy as sa
 
 from api_client import poll_until_final, submit_task
 from circuits import NON_TERMINATING_CIRCUIT
-from common.tasks import TaskStatus
+from common.domain.tasks import TaskStatus
 from stack import TASK_TIMEOUT_SECONDS, ComposeStack
 from task_progress import TaskProgress, fetch_progress, wait_until_started
 

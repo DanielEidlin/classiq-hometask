@@ -2,7 +2,7 @@
 
 import os
 
-from worker.runner import SimulationLimits
+from worker.domain.abstractions import SimulationLimits
 
 SIMULATION_LIMITS = SimulationLimits(
     shots=int(os.environ.get("SHOTS", "1024")),

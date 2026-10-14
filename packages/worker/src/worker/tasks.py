@@ -2,16 +2,14 @@
 
 import functools
 import os
-import uuid
 
-from celery.exceptions import Reject
-
-from common.task_queue import PROCESS_TASK_NAME
+from common.data.task_queue import PROCESS_TASK_NAME
 from worker.app import app
-from worker.abstractions import DatabaseUnavailable
-from worker.database import create_database_engine, retry_while_unavailable
-from worker.handler import TaskHandler
-from worker.runner import SimulationRunner
+from worker.business.handler import TaskHandler
+from worker.business.runner import SimulationRunner
+from worker.data.database import create_database_engine, retry_while_unavailable
+from worker.data.store import PostgresTaskStore
+from worker.presentation.tasks import process_task
 from worker.settings import (
     DB_OUTAGE_GIVE_UP_SECONDS,
     DB_RETRY_FIRST_DELAY_SECONDS,
@@ -20,7 +18,6 @@ from worker.settings import (
     MAX_ATTEMPTS,
     SIMULATION_LIMITS,
 )
-from worker.store import PostgresTaskStore
 
 
 # Built on first use: the engine's connection pool must not cross Celery's fork into its pool processes.
@@ -37,8 +34,4 @@ def _handler() -> TaskHandler:
 
 @app.task(name=PROCESS_TASK_NAME)  # type: ignore[untyped-decorator]
 def process(task_id: str) -> None:
-    try:
-        _handler().handle(uuid.UUID(task_id))
-    except DatabaseUnavailable:
-        # Unacknowledged and requeued, so the task runs again once the database is back.
-        raise Reject("the database is unavailable", requeue=True) from None
+    process_task(_handler(), task_id)

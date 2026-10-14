@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from testcontainers.postgres import PostgresContainer
 
-from common.publisher import TaskPublisher
-from common.tasks import metadata
+from common.data.publisher import TaskPublisher
+from common.data.tables import metadata
 
 POSTGRES_IMAGE = "postgres:16-alpine"
 

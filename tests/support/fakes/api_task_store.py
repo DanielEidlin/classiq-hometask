@@ -2,7 +2,7 @@
 
 import uuid
 
-from api.models import TaskOutcome
+from api.domain.outcomes import TaskOutcome
 
 
 class FakeTaskStore:
