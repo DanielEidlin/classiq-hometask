@@ -23,8 +23,9 @@ TASK_QUEUE_CAP_POLICY = "test-task-queue-cap"
 _COMPOSE_ENVIRONMENT = {**os.environ, "API_PORT": API_PORT, "POSTGRES_PORT": POSTGRES_PORT}
 
 
-def compose(*args: str) -> None:
-    subprocess.run(
+def compose(*args: str) -> str:
+    """Run a `docker compose` command against the test stack and return its standard output."""
+    result = subprocess.run(
         [
             "docker", "compose", "--project-name", PROJECT_NAME,
             "--file", "compose.yaml", "--file", TEST_OVERRIDE_FILE,
@@ -33,7 +34,10 @@ def compose(*args: str) -> None:
         cwd=REPO_ROOT,
         env=_COMPOSE_ENVIRONMENT,
         check=True,
+        stdout=subprocess.PIPE,
+        text=True,
     )
+    return result.stdout
 
 
 def rabbitmqctl(*args: str) -> str:
@@ -52,10 +56,15 @@ class ComposeStack:
     """Stops and starts services of the running Compose stack, for tests that need to hold work back."""
 
     def stop(self, service: str) -> None:
+        """Stop every replica with SIGTERM, as a redeploy would; returns once they have exited."""
         compose("stop", service)
 
     def start(self, service: str) -> None:
         compose("start", service)
+
+    def start_until_healthy(self, service: str) -> None:
+        compose("start", service)
+        self._wait_until_healthy(service)
 
     def kill(self, service: str) -> None:
         """Kill every replica of the service with SIGKILL, as a crash would, with no graceful shutdown."""
@@ -64,7 +73,20 @@ class ComposeStack:
     def restart(self, service: str) -> None:
         # `restart` returns once the container is running, not once it is healthy.
         compose("restart", service)
+        self._wait_until_healthy(service)
+
+    def _wait_until_healthy(self, service: str) -> None:
         compose("up", "--detach", "--wait", "--wait-timeout", WAIT_TIMEOUT_SECONDS, "--no-deps", service)
+
+    def log_lines(self, service: str) -> list[str]:
+        """Everything the service's containers have written, across restarts."""
+        return compose("logs", "--no-log-prefix", "--no-color", service).splitlines()
+
+    def exit_codes(self, service: str) -> list[int]:
+        """The exit code of each of the service's replicas; only meaningful once they have stopped."""
+        output = compose("ps", "--all", "--format", "json", service)
+        # One JSON object per line, one line per container.
+        return [int(json.loads(line)["ExitCode"]) for line in output.splitlines() if line.strip()]
 
     def purge_task_queue(self) -> None:
         rabbitmqctl("purge_queue", TASK_QUEUE)
