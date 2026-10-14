@@ -78,8 +78,9 @@ services:
       MAX_ATTEMPTS: ${MAX_ATTEMPTS:-3}
     # On SIGTERM, Celery's warm shutdown stops taking tasks and finishes the current one:
     # up to TASK_TIMEOUT_SECONDS, plus the runner's 5 s to stop a timed-out simulation,
-    # plus a margin for recording the outcome. Docker kills it with SIGKILL after this.
-    stop_grace_period: 75s
+    # plus a margin for recording the outcome. Raise it with TASK_TIMEOUT_SECONDS; Docker
+    # kills the worker with SIGKILL once it runs out.
+    stop_grace_period: ${WORKER_STOP_GRACE_PERIOD:-75s}
     deploy:
       replicas: 2
       resources:

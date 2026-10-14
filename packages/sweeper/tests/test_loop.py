@@ -15,6 +15,7 @@ pytestmark = pytest.mark.asyncio
 LONG_INTERVAL_SECONDS = 3600
 RETURN_DEADLINE_SECONDS = 5
 STOP_DELAY_SECONDS = 0.05
+NO_INTERVAL_SECONDS = 0
 
 
 def _build_sweeper() -> AsyncMock:
@@ -68,7 +69,7 @@ async def test_a_failed_pass_is_retried_on_the_next_interval(tmp_path: Path) -> 
     heartbeat = tmp_path / "heartbeat"
 
     async with asyncio.timeout(RETURN_DEADLINE_SECONDS):
-        await sweep_until_stopped(sweeper, stop, 0, heartbeat)
+        await sweep_until_stopped(sweeper, stop, NO_INTERVAL_SECONDS, heartbeat)
 
     assert sweeper.sweep.await_count == 2
     assert heartbeat.exists()

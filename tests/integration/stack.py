@@ -62,7 +62,7 @@ class ComposeStack:
     def start(self, service: str) -> None:
         compose("start", service)
 
-    def start_and_wait(self, service: str) -> None:
+    def start_until_healthy(self, service: str) -> None:
         compose("start", service)
         self._wait_until_healthy(service)
 

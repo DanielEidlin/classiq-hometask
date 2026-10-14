@@ -61,7 +61,7 @@ def test_service_exits_cleanly_on_sigterm(compose_stack: ComposeStack, service: 
         exit_codes = compose_stack.exit_codes(service)
         shutdown_lines = compose_stack.log_lines(service)[lines_before_stop:]
     finally:
-        compose_stack.start_and_wait(service)
+        compose_stack.start_until_healthy(service)
 
     assert set(exit_codes) == {0}
     assert [line for line in shutdown_lines if _is_error(line)] == []
