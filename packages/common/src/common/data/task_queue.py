@@ -1,10 +1,16 @@
-"""The task queue and its message: the contract between the publishers (API, sweeper) and
-the Celery worker.
+"""Defines the task queue and its message, which the publishers (API, sweeper) and the Celery
+worker agree on.
 
-The queue's name and arguments are shared because every declaration must match. The
-message carries only the task ID. It is built in Celery's task message format
+The queue's name and arguments are shared because every declaration must match: RabbitMQ
+refuses a declaration whose arguments differ from the existing queue's. The task name is
+shared so the message names the task the worker registers.
+
+The message carries only the task ID. It is built in Celery's task message format
 (protocol v2, https://docs.celeryq.dev/en/stable/internals/protocol.html) so that a
-Celery worker consumes it natively, without the publishers depending on Celery.
+Celery worker consumes it natively, without the publishers depending on Celery. Only the
+publishers run this encoder; Celery parses the message on the worker. The worker's tests
+check that the message names a registered task and fits its signature, and the integration
+tests check that a real worker consumes it.
 """
 
 import json
