@@ -13,14 +13,15 @@ log = structlog.get_logger()
 
 
 async def sweep_until_stopped(
-    sweeper: Sweeper, stop: asyncio.Event, interval_seconds: float, heartbeat: Path
+    sweeper: Sweeper, stop_event: asyncio.Event, interval_seconds: float, heartbeat: Path
 ) -> None:
-    """Run a pass every `interval_seconds`, recording each successful one, until `stop` is set.
+    """Run a pass every `interval_seconds`, recording each successful one, until `stop_event`
+    is set.
 
-    A pass in progress when `stop` is set runs to the end, so its row locks are released by a
-    commit rather than a dropped connection; the wait between passes is cut short.
+    A pass in progress when `stop_event` is set runs to the end, so its row locks are released
+    by a commit rather than a dropped connection; the wait between passes is cut short.
     """
-    while not stop.is_set():
+    while not stop_event.is_set():
         try:
             await sweeper.sweep()
         except Exception:
@@ -30,4 +31,4 @@ async def sweep_until_stopped(
         else:
             record_pass(heartbeat)
         with contextlib.suppress(TimeoutError):
-            await asyncio.wait_for(stop.wait(), interval_seconds)
+            await asyncio.wait_for(stop_event.wait(), interval_seconds)

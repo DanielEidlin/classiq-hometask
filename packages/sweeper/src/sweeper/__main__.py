@@ -25,16 +25,18 @@ async def run() -> None:
     configure_logging("sweeper")
     # As PID 1 in its container, the process would otherwise ignore SIGTERM and be killed
     # once Docker's stop grace period ran out.
-    stop = asyncio.Event()
+    stop_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     for signal_number in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(signal_number, stop.set)
+        loop.add_signal_handler(signal_number, stop_event.set)
 
     engine = create_async_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
     publisher = await TaskPublisher.connect(os.environ["RABBITMQ_URL"])
     sweeper = Sweeper(engine, publisher, grace=SWEEP_GRACE, stale_after=STALE_TASK_AFTER)
     try:
-        await sweep_until_stopped(sweeper, stop, SWEEP_INTERVAL_SECONDS, SWEEPER_HEARTBEAT_FILE)
+        await sweep_until_stopped(
+            sweeper, stop_event, SWEEP_INTERVAL_SECONDS, SWEEPER_HEARTBEAT_FILE
+        )
     finally:
         await publisher.close()
         await engine.dispose()
