@@ -11,6 +11,7 @@ from common.tasks import ErrorCode
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
 
 MAX_MESSAGE_LENGTH = 1000
+NO_MEASUREMENTS_MESSAGE = "Circuit has no measurements, so it would produce no counts."
 # Aer reports a circuit that doesn't fit `max_memory_mb` in the result's status, without raising.
 _INSUFFICIENT_MEMORY = "Insufficient memory"
 
@@ -49,7 +50,7 @@ def simulate(circuit_text: str, shots: int, max_memory_mb: int) -> SimulationOut
     if not has_measurement(circuit):
         return SimulationFailed(
             code=ErrorCode.INVALID_CIRCUIT,
-            message="Circuit has no measurements, so it would produce no counts.",
+            message=NO_MEASUREMENTS_MESSAGE,
         )
 
     try:

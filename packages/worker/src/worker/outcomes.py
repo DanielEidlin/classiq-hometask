@@ -16,7 +16,6 @@ class SimulationFailed(BaseModel):
     status: Literal["failed"] = "failed"
     code: ErrorCode
     message: str
-    # For logs only, never returned to clients.
     traceback: str | None = None
 
 

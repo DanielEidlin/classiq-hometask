@@ -21,6 +21,13 @@ from worker.simulation import simulate
 
 STOP_GRACE_SECONDS = 5
 
+TIMEOUT_MESSAGE = "Simulation exceeded the time limit of {timeout_seconds:g} seconds."
+KILLED_MESSAGE = (
+    "Simulation was killed by the operating system (signal {signal}). "
+    "The usual cause is exceeding the worker's memory limit."
+)
+UNEXPECTED_EXIT_MESSAGE = "Simulation process exited unexpectedly with code {exitcode}."
+
 
 class SimulationLimits(BaseModel, frozen=True):
     shots: int
@@ -84,21 +91,18 @@ def classify_exit(child_exit: ChildExit, limits: SimulationLimits) -> Simulation
     if child_exit.timed_out:
         return SimulationFailed(
             code=ErrorCode.TIMEOUT,
-            message=f"Simulation exceeded the time limit of {limits.timeout_seconds:g} seconds.",
+            message=TIMEOUT_MESSAGE.format(timeout_seconds=limits.timeout_seconds),
         )
     if child_exit.outcome is not None:
         return child_exit.outcome
     if child_exit.exitcode is not None and child_exit.exitcode < 0:
         return SimulationFailed(
-            code=ErrorCode.OUT_OF_MEMORY,
-            message=(
-                f"Simulation was killed by the operating system (signal {-child_exit.exitcode}), "
-                "most likely for exceeding the worker's memory limit."
-            ),
+            code=ErrorCode.KILLED,
+            message=KILLED_MESSAGE.format(signal=-child_exit.exitcode),
         )
     return SimulationFailed(
         code=ErrorCode.SIMULATION_ERROR,
-        message=f"Simulation process exited unexpectedly with code {child_exit.exitcode}.",
+        message=UNEXPECTED_EXIT_MESSAGE.format(exitcode=child_exit.exitcode),
     )
 
 

@@ -86,7 +86,7 @@ A sweeper service republishes any task still unpublished after a grace period, w
 | Circuit needs more memory than the worker's budget | 27-qubit statevector on a 1.7 GB budget | `failed`, no retry; the simulator's own message is returned | `CIRCUIT_TOO_LARGE` |
 | Circuit raises during simulation | Aer error, no counts produced | `failed`, no retry | `SIMULATION_ERROR` |
 | Circuit exceeds time limit | Non-terminating loop | `failed`, no retry | `TIMEOUT` |
-| Simulation killed by the OS | Memory use exceeds the container limit despite the simulator's own check | `failed`, no retry | `OUT_OF_MEMORY` |
+| Simulation killed by the OS | Memory use exceeds the container limit despite the simulator's own check | `failed`, no retry | `KILLED` |
 | Database unreachable | Postgres down while saving | Retried in place, then the message is returned to the queue (decision 18) | (none; the outcome cannot be recorded) |
 | Whole worker lost | Container or host crash | Redelivered by RabbitMQ; capped at `MAX_ATTEMPTS` (default 3) | `WORKER_LOST` |
 

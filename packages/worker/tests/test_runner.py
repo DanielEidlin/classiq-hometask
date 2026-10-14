@@ -4,7 +4,8 @@ import sys
 
 from common.tasks import ErrorCode
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
-from worker.runner import SimulationLimits, classify_exit, run, run_in_child
+from worker.runner import TIMEOUT_MESSAGE, SimulationLimits, classify_exit, run, run_in_child
+from worker.simulation import NO_MEASUREMENTS_MESSAGE
 
 LIMITS = SimulationLimits(shots=1024, max_memory_mb=1700, timeout_seconds=60)
 SHORT_TIMEOUT_SECONDS = 2
@@ -47,8 +48,7 @@ def test_circuit_without_measurements_fails() -> None:
     failure = _failure('OPENQASM 3.0;\ninclude "stdgates.inc";\nqubit[2] q;\nh q[0];\n')
 
     assert failure == SimulationFailed(
-        code=ErrorCode.INVALID_CIRCUIT,
-        message="Circuit has no measurements, so it would produce no counts.",
+        code=ErrorCode.INVALID_CIRCUIT, message=NO_MEASUREMENTS_MESSAGE
     )
 
 
@@ -78,7 +78,7 @@ def test_non_terminating_circuit_times_out() -> None:
 
     assert failure == SimulationFailed(
         code=ErrorCode.TIMEOUT,
-        message=f"Simulation exceeded the time limit of {SHORT_TIMEOUT_SECONDS} seconds.",
+        message=TIMEOUT_MESSAGE.format(timeout_seconds=SHORT_TIMEOUT_SECONDS),
     )
 
 
@@ -95,13 +95,13 @@ def test_unexpected_simulator_error_fails_with_its_type_and_message() -> None:
 
 if sys.platform != "win32":  # Windows has no SIGKILL.
 
-    def test_child_killed_by_a_signal_is_classified_as_out_of_memory() -> None:
+    def test_child_killed_by_a_signal_is_classified_as_killed() -> None:
         child_exit = run_in_child(_kill_self, (), LIMITS.timeout_seconds)
 
         assert child_exit.exitcode == -signal.SIGKILL
         outcome = classify_exit(child_exit, LIMITS)
         assert isinstance(outcome, SimulationFailed)
-        assert outcome.code == ErrorCode.OUT_OF_MEMORY
+        assert outcome.code == ErrorCode.KILLED
 
     def _kill_self() -> SimulationOutcome:
         # What the kernel's OOM killer does to the child.

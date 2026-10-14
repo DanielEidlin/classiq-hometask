@@ -1,6 +1,13 @@
 from common.tasks import ErrorCode
 from worker.outcomes import SimulationCompleted, SimulationFailed
-from worker.runner import ChildExit, SimulationLimits, classify_exit
+from worker.runner import (
+    KILLED_MESSAGE,
+    TIMEOUT_MESSAGE,
+    UNEXPECTED_EXIT_MESSAGE,
+    ChildExit,
+    SimulationLimits,
+    classify_exit,
+)
 
 LIMITS = SimulationLimits(shots=1024, max_memory_mb=1700, timeout_seconds=60)
 SIGKILL = 9
@@ -19,26 +26,25 @@ def test_timed_out_child_is_a_timeout() -> None:
     child_exit = ChildExit(outcome=None, timed_out=True, exitcode=-SIGKILL)
 
     assert classify_exit(child_exit, LIMITS) == SimulationFailed(
-        code=ErrorCode.TIMEOUT, message="Simulation exceeded the time limit of 60 seconds."
+        code=ErrorCode.TIMEOUT,
+        message=TIMEOUT_MESSAGE.format(timeout_seconds=LIMITS.timeout_seconds),
     )
 
 
-def test_child_killed_by_a_signal_is_out_of_memory() -> None:
+def test_child_killed_by_a_signal_is_killed() -> None:
     child_exit = ChildExit(outcome=None, timed_out=False, exitcode=-SIGKILL)
 
     assert classify_exit(child_exit, LIMITS) == SimulationFailed(
-        code=ErrorCode.OUT_OF_MEMORY,
-        message=(
-            "Simulation was killed by the operating system (signal 9), "
-            "most likely for exceeding the worker's memory limit."
-        ),
+        code=ErrorCode.KILLED,
+        message=KILLED_MESSAGE.format(signal=SIGKILL),
     )
 
 
 def test_child_that_exits_without_an_outcome_is_a_simulation_error() -> None:
-    child_exit = ChildExit(outcome=None, timed_out=False, exitcode=1)
+    exitcode = 1
+    child_exit = ChildExit(outcome=None, timed_out=False, exitcode=exitcode)
 
     assert classify_exit(child_exit, LIMITS) == SimulationFailed(
         code=ErrorCode.SIMULATION_ERROR,
-        message="Simulation process exited unexpectedly with code 1.",
+        message=UNEXPECTED_EXIT_MESSAGE.format(exitcode=exitcode),
     )
