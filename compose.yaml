@@ -73,8 +73,14 @@ services:
       <<: *app-environment
       SHOTS: ${SHOTS:-1024}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      TASK_TIMEOUT_SECONDS: ${TASK_TIMEOUT_SECONDS:-60}
+      AER_MAX_MEMORY_MB: ${AER_MAX_MEMORY_MB:-1700}
     deploy:
       replicas: 2
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2G
     depends_on:
       migrate:
         condition: service_completed_successfully
