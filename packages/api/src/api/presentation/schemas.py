@@ -30,3 +30,14 @@ class CompletedTaskResponse(BaseModel):
 class FailedTaskResponse(BaseModel):
     status: Literal["error"] = "error"
     message: str
+
+
+class HealthResponse(BaseModel):
+    status: Literal["ok"] = "ok"
+
+
+class ErrorResponse(BaseModel):
+    """The body of every error response; declared on the routes so the API docs show it."""
+
+    status: Literal["error"] = "error"
+    message: str

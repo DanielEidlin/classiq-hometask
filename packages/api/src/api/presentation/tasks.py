@@ -10,6 +10,7 @@ from api.domain.outcomes import CompletedOutcome, FailedOutcome, PendingOutcome
 from api.presentation.dependencies import PublisherDep, TaskStoreDep
 from api.presentation.schemas import (
     CompletedTaskResponse,
+    ErrorResponse,
     FailedTaskResponse,
     PendingTaskResponse,
     SubmitTaskRequest,
@@ -32,7 +33,15 @@ async def validate_task(body: SubmitTaskRequest) -> SubmitTaskRequest:
     return body
 
 
-@router.post("", status_code=202)
+@router.post(
+    "",
+    status_code=202,
+    responses={
+        400: {"model": ErrorResponse, "description": "Malformed body"},
+        413: {"model": ErrorResponse, "description": "Circuit larger than MAX_CIRCUIT_BYTES"},
+        503: {"model": ErrorResponse, "description": "Queue full or broker unavailable"},
+    },
+)
 async def submit_task(
     body: Annotated[SubmitTaskRequest, Depends(validate_task)],
     task_store: TaskStoreDep,
@@ -55,7 +64,9 @@ async def submit_task(
     return SubmitTaskResponse(task_id=task_id)
 
 
-@router.get("/{task_id}")
+@router.get(
+    "/{task_id}", responses={404: {"model": ErrorResponse, "description": "Task not found"}}
+)
 async def get_task(
     task_id: str, task_store: TaskStoreDep
 ) -> PendingTaskResponse | CompletedTaskResponse | FailedTaskResponse:

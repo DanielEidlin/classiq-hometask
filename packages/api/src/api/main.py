@@ -3,10 +3,12 @@
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.exceptions import HTTPException
@@ -36,6 +38,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[AppState]:
 app = FastAPI(title="Quantum Circuit Execution", lifespan=lifespan)
 app.include_router(tasks.router)
 app.include_router(health.router)
+
+
+def _openapi_without_422() -> dict[str, Any]:
+    """FastAPI documents a 422 on every route with parameters, but this API answers a
+    malformed request with 400 (`render_validation_error`), so the 422 is removed."""
+    if app.openapi_schema is None:
+        schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+        for operations in schema["paths"].values():
+            for operation in operations.values():
+                operation["responses"].pop("422", None)
+        app.openapi_schema = schema
+    return app.openapi_schema
+
+
+app.openapi = _openapi_without_422  # type: ignore[method-assign]
 
 
 @app.exception_handler(HTTPException)

@@ -24,7 +24,9 @@ A service that accepts quantum circuits over HTTP, simulates them asynchronously
 docker compose up --build --detach --wait
 ```
 
-This builds the images, starts Postgres and RabbitMQ, runs the database migrations, then starts the API, two workers and the sweeper. `--wait` returns once every health check passes. The API listens on <http://localhost:8000>.
+This builds the images, starts Postgres and RabbitMQ, runs the database migrations, then starts the API, two workers and the sweeper. `--wait` returns once every health check passes. The API listens on <http://localhost:8000>. A plain `docker compose up` also works: it builds missing images and stays attached to the logs.
+
+The Compose file is `compose.yaml`, the name Docker Compose v2 looks for first; it plays the role of the `docker-compose.yml` the assignment mentions.
 
 Other useful commands:
 
@@ -186,6 +188,8 @@ A `uv` workspace with one package per service (decision 8):
 | `tests/integration` | Black-box tests against the full Compose stack |
 | `tests/support/fakes` | In-memory test doubles for each service's task store, and a simulated database outage |
 
+Inside each package, code is split into tiers (`presentation/`, `business/`, `data/`, `domain/`), with the production objects built at the package root (decision 19). [`CODING_STANDARDS.md`](CODING_STANDARDS.md) holds the conventions drawn from review, and [`CONTEXT.md`](CONTEXT.md) the domain vocabulary (task, circuit, counts, attempt).
+
 ## Configuration
 
 Every setting is an environment variable with a default. To change one passed through by `compose.yaml` (all but `DATABASE_URL`, `RABBITMQ_URL` and `SWEEPER_HEARTBEAT_FILE`), set it in the shell or in a `.env` file next to `compose.yaml`, which Docker Compose reads automatically, then run `docker compose up --detach` again:
@@ -242,7 +246,7 @@ uv sync --locked --all-packages
 | What | Command | Needs |
 |---|---|---|
 | Type check | `uv run mypy` | — |
-| Unit tests | `uv run pytest -m "not integration"` | Docker running: the worker and sweeper tests start a throwaway Postgres container with testcontainers |
+| Unit tests | `uv run pytest -m "not integration"` | Docker running: the task-store tests of the API, worker and sweeper start a throwaway Postgres container with testcontainers |
 | Integration tests | `uv run pytest -m integration` | Docker; takes several minutes |
 | One file | `uv run pytest tests/integration/test_core_flow.py` | Whatever its tests need |
 
@@ -452,7 +456,7 @@ All values are configurable through environment variables and the Compose file.
 
 **Decision.** Three layers, all run in CI (GitHub Actions) on every push:
 
-- **Unit tests** for logic that is intricate in isolation: the Celery message encoder, the publisher's failure handling, failure classification, the database retry policy, and the sweeper's loop and health check. The API's routes, the worker's task handler and the sweeper's pass run against in-memory fakes of their task stores: request validation and load shedding, skipping a final or missing task, the attempt cap, stopping before simulating when the database is unreachable, and skipping a rejected publish. The simulation runner's tests simulate real circuits with Aer, covering counts, invalid QASM3, no measurements, too large for the memory budget, a timeout and an unexpected simulator error.
+- **Unit tests** for logic that is intricate in isolation: the Celery message encoder and its contract with the worker (the message names a task the worker registers, and its arguments fit that task's signature), the publisher's failure handling, failure classification, the database retry policy, and the sweeper's loop and health check. The API's routes, the worker's task handler and the sweeper's pass run against in-memory fakes of their task stores: request validation and load shedding, skipping a final or missing task, the attempt cap, stopping before simulating when the database is unreachable, and skipping a rejected publish. The simulation runner's tests simulate real circuits with Aer, covering counts, invalid QASM3, no measurements, too large for the memory budget, a timeout and an unexpected simulator error.
 - **Task-store tests against a real Postgres**, in a throwaway container started by testcontainers: each service's statements, behind the interface the rest of its code uses. The worker's store keeps the first of two recorded outcomes, counts attempts, and retries and then gives up while the database is unreachable. The sweeper's store skips tasks another batch holds and finds stale tasks. The API's store reads each stored outcome back in its response shape.
 - **Integration tests**, black-box over HTTP against the full Compose stack, which a pytest fixture starts with `docker compose up --wait` (blocking until every health check passes). A test override file shortens the worker's time limit to 15 s, so the slow cases run quickly, and publishes Postgres's port, so tests can inspect and arrange task rows. The queue-full test lowers the queue cap with a temporary RabbitMQ policy.
 
@@ -516,6 +520,7 @@ All values are configurable through environment variables and the Compose file.
 **Rationale.**
 
 - **Structured logs** can be filtered and aggregated by field in any log system, and a shared `task_id` lets one filter follow a task through every service.
+- **Known gap: the libraries' own lines are plain text.** structlog configures only the application's loggers. Uvicorn's access and startup lines and Celery's worker lines (startup, `Task worker.process[<task_id>] received`) still go through the standard `logging` module with those libraries' text formatters. Celery's lines carry the task ID, because the Celery task ID is the task's own ID, so a task can still be followed. Routing standard logging through structlog's formatter is listed under future work.
 - **Health checks** order startup so services don't start before their dependencies are ready, let `docker compose up --wait` (used by the integration tests) know when the stack is usable, and make a stuck component visible.
 - **The worker's grace period exceeds the 60 s task timeout.** Docker's default of 10 s would kill in-flight simulations on every redeploy. They would be redelivered and re-run, which is correct under at-least-once delivery but wasteful.
 
@@ -544,6 +549,8 @@ All values are configurable through environment variables and the Compose file.
 2. **A worker alive but stuck** (for example, blocked on a call that never returns). RabbitMQ's `consumer_timeout` is set to 5 minutes, so a delivery held longer than that is returned to the queue. The worker's database calls have their own timeouts.
 3. **A message lost despite durable, persistent, confirmed publishing** (disk failure, a purged queue, misconfiguration). The sweeper logs a `stale_task` warning for any task `pending` longer than `STALE_TASK_SECONDS` (600 s). It does not republish them.
 
+One path is detected but not recovered: an unexpected exception in the worker's task handler outside the simulation (a bug, or a database error other than unavailability). The simulation runner turns every circuit-caused failure into an outcome, so this exception can only come from the worker's own code or the database. Celery logs it and acknowledges the message, as it does for any failed task, so the task stays `pending` until the `stale_task` warning reports it. Requeueing instead would loop forever on a deterministic error, for example one raised while recording the `WORKER_LOST` outcome itself.
+
 **Rationale.**
 
 - **The failure can't be recorded when the database is down.** Marking the task `failed` would itself require the database. Acknowledging the message without recording an outcome would leave the task `pending` forever, so the message is returned rather than dropped. Celery's default retry behaviour has exactly this flaw: once `max_retries` runs out, the failed task's message is acknowledged.
@@ -552,9 +559,40 @@ All values are configurable through environment variables and the Compose file.
 - **The consumer timeout exceeds the 60 s task timeout** with ample margin, so it fires only for genuinely stuck workers. RabbitMQ's default of 30 minutes would leave such a task waiting too long.
 - **Stale tasks are detected, not republished.** Under heavy load a task legitimately waiting in a long queue looks the same as one whose message was lost. Republishing would create duplicate runs whose attempts could falsely fail a healthy task with `WORKER_LOST`. It would also mask message loss, the failure the warning exists to expose, and invalidate the broker-restart test's assumption (decision 13).
 
+### 19. Code structure: tiers, composition roots and injected collaborators
+
+**Decision.** Each package splits its code into four tiers, and a tier imports only from the tiers below it:
+
+| Tier | Contents |
+|---|---|
+| `presentation/` | Entry points: FastAPI routers and dependencies, the Celery task body, the sweeper loop |
+| `business/` | Logic: the task handler, the simulation runner, the sweeper pass |
+| `data/` | Outside systems: the Postgres task stores, the database engine and retry policy, the publisher and queue encoding, the heartbeat file |
+| `domain/` | Models, enums and outcomes, and the `Protocol`s in `abstractions.py` that `business` depends on and `data` implements |
+
+The package root is the composition root: `api/main.py`, `worker/tasks.py` and `sweeper/__main__.py` build the concrete parts (engine, store, publisher, runner) and pass them in, and no tier imports the root. Classes receive their collaborators in the constructor; the API's routes receive theirs as FastAPI dependencies, which the lifespan opens. Each service's SQL lives in its `data/store.py`, behind a `TaskStore` protocol written for what that service does (the API inserts and reads outcomes, the worker starts attempts and records outcomes, the sweeper locks unpublished tasks). Tests mirror the tiers, and hand-written fakes of each store live in `tests/support/fakes/`. The detailed rules are in [`CODING_STANDARDS.md`](CODING_STANDARDS.md).
+
+**Rationale.**
+
+- **The handler, runner and sweeper are tested without infrastructure.** With the store behind a protocol, their tests pass an in-memory fake and check behaviour (a final task is skipped, the attempt cap fails a task, a rejected publish is retried next pass) in milliseconds. The SQL is tested once, on the real store against Postgres, which is where its behaviour (conditional writes, `SKIP LOCKED`) actually lives.
+- **One place builds production objects.** Nothing opens a connection at import, so modules can be imported by tests and tools freely, and the worker's database pool is created after Celery forks (`functools.cache`), never shared across processes.
+- **Per-service stores rather than one shared repository.** The services share the table definition (`common`), but each needs different statements and different failure handling: only the worker retries while the database is down. A shared store would give every service methods it must never call.
+- **Tiers make the dependency direction visible.** A reviewer can tell from an import whether logic reaches into infrastructure. The cost is a few more folders in small packages; a tier folder exists only when it has modules.
+
 ## Future work
 
 - **Retention policy:** delete or archive tasks older than a configurable age, bounding table growth. Partition the table by creation date if volumes grow further.
 - **Per-task locking:** add a distributed lock to reduce duplicate simulations if they become a measurable cost, keeping the conditional writes as the correctness guarantee (decision 10).
 - **Claim-check storage:** move circuits to an object store if the size limit is ever raised into the megabytes.
 - **Centralised logs in Elasticsearch:** ship every service's JSON logs to Elasticsearch (for example with Filebeat or Fluent Bit reading the container output) and search them in Kibana. The logs are already structured with a `task_id` on every task-related line (decision 16), so one query would follow a task through the API, the worker and the sweeper, and the `stale_task` and `database_unavailable` events could drive alerts. Today the logs are read with `docker compose logs`, which keeps them only as long as the containers exist.
+- **JSON for the libraries' log lines too:** route the standard `logging` module through structlog's `ProcessorFormatter`, and give Uvicorn and Celery that configuration (Uvicorn's `log_config`, Celery's `setup_logging` signal), so every line is JSON (decision 16).
+- **Metrics and alerts:** expose queue depth, task outcomes by error code, queue wait and run time (from the task timestamps, decision 15) to Prometheus, and alert on `stale_task`, `database_unavailable` and failing health checks. Structured logs are the only signal today.
+- **Recover tasks the handler gave up on:** a task left `pending` by an unexpected handler exception (decision 18) is only reported. An operator command, or a sweeper rule restricted to tasks whose attempt has started but not finished for far longer than the task timeout, could republish them, once the risk of masking message loss is handled.
+- **Bounded sweeper passes:** the sweeper locks every unpublished task in one transaction and publishes them one by one, and logs one `stale_task` line per stale task on every pass. After a long broker outage this means one long transaction and a burst of warnings. A `LIMIT` per batch and one summary line per pass (count and oldest age) would bound both.
+- **Reset the integration stack per test** ([#24](https://github.com/DanielEidlin/classiq-hometask/issues/24)): a fixture that brings every service back up, purges the queue and empties the `tasks` table before each test that changes the stack, replacing each test's own `finally` restore.
+- **Several API processes:** the API runs one Uvicorn process, which is enough for I/O-bound work at this scale (decision 7). For more, run several Uvicorn workers per container, or several API replicas behind a reverse proxy, since only one container can bind the published port.
+- **Secrets:** the Postgres and RabbitMQ credentials are fixed development values in `compose.yaml`. A real deployment would take them from Docker secrets or a secrets manager, and would not use RabbitMQ's `guest` account.
+
+### Out of scope
+
+Deliberately left out, as the specification didn't call for them: authentication (unguessable task IDs are the only protection, decision 15), client-chosen shots or simulator options (decision 6), cancelling, deleting or listing tasks, real quantum hardware, and orchestration beyond Docker Compose (Kubernetes manifests, autoscaling).
