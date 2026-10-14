@@ -1,6 +1,7 @@
 """The work done inside the runner's child process: parse and simulate a circuit."""
 
 import traceback
+from typing import cast
 
 from qiskit import qasm3, transpile
 from qiskit.exceptions import QiskitError
@@ -23,7 +24,20 @@ def _truncate(message: str) -> str:
 
 def _describe(exc: Exception) -> str:
     # A QiskitError's str() wraps its message in quotes.
-    return exc.message if isinstance(exc, QiskitError) else str(exc)
+    if isinstance(exc, QiskitError):
+        return cast(str, exc.message)
+    return str(exc) or _describe_syntax_error(exc)
+
+
+def _describe_syntax_error(exc: Exception) -> str:
+    """The QASM3 parser's syntax error has no message. The ANTLR exception it wraps names the
+    token where parsing stopped, with its line and 0-based column."""
+    antlr_error = exc.__cause__.args[0] if exc.__cause__ and exc.__cause__.args else None
+    token = getattr(antlr_error, "offendingToken", None)
+    if token is None:
+        return "syntax error."
+    where = "the end of the circuit" if token.text == "<EOF>" else repr(token.text)
+    return f"syntax error at line {token.line}, column {token.column + 1}, at {where}."
 
 
 def _rejection(result: Result) -> SimulationFailed:
