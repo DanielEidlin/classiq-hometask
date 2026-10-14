@@ -48,8 +48,10 @@ class TaskPublisher:
 
     @property
     def is_connected(self) -> bool:
-        # `is_closed` only flips on an explicit close(); `connected` is cleared whenever the link drops.
-        return self._connection.connected.is_set()
+        # The connection's `is_closed` only flips on an explicit close(); `connected` is cleared
+        # whenever the link drops. After a reconnect, `connected` is set before the channel is
+        # reopened, so the channel must be checked too.
+        return self._connection.connected.is_set() and not self._channel.is_closed
 
     async def publish(self, task_id: uuid.UUID) -> None:
         """Publish the task's message; returns once the broker has confirmed it.

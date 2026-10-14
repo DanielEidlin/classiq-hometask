@@ -2,7 +2,8 @@ import httpx
 import pytest
 
 from stack import MAX_QUEUED_TASKS, ComposeStack
-from test_core_flow import BELL_CIRCUIT, poll_until_final
+from api_client import poll_until_final
+from circuits import BELL_CIRCUIT
 
 pytestmark = pytest.mark.integration
 
