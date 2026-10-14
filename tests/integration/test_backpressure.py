@@ -8,8 +8,6 @@ from stack import ComposeStack
 
 pytestmark = pytest.mark.integration
 
-# Set by a policy for this test only, so filling the queue is quick and other tests keep the
-# configured cap.
 TEST_QUEUE_CAP = 5
 SUBMISSIONS_OVER_THE_CAP = 3
 
@@ -30,6 +28,8 @@ def test_submissions_beyond_the_queue_cap_get_503_and_accepted_tasks_complete(
     try:
         compose_stack.stop("worker")
         compose_stack.purge_task_queue()
+        # A policy for this test only, so filling the queue is quick and other tests keep the
+        # configured cap.
         compose_stack.cap_task_queue(TEST_QUEUE_CAP)
         responses = [
             api.post("/tasks", json={"qc": BELL_CIRCUIT})

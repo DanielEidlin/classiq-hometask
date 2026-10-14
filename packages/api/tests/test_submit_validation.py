@@ -4,6 +4,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.settings import MAX_CIRCUIT_BYTES
+from api.tasks import CIRCUIT_TOO_LARGE_MESSAGE
 
 
 def test_missing_qc_returns_400(client: TestClient) -> None:
@@ -63,10 +64,7 @@ def test_circuit_over_the_size_limit_returns_413_and_is_not_stored(
     response = client.post("/tasks", json={"qc": oversized_circuit})
 
     assert response.status_code == 413
-    assert response.json() == {
-        "status": "error",
-        "message": f"Circuit is larger than the limit of {MAX_CIRCUIT_BYTES} bytes.",
-    }
+    assert response.json() == {"status": "error", "message": CIRCUIT_TOO_LARGE_MESSAGE}
     db_connection.execute.assert_not_awaited()
     publisher.publish.assert_not_awaited()
 

@@ -19,6 +19,7 @@ log = structlog.get_logger()
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 SERVICE_BUSY_MESSAGE = "The service is busy. Submit the task again later."
+CIRCUIT_TOO_LARGE_MESSAGE = f"Circuit is larger than the limit of {MAX_CIRCUIT_BYTES} bytes."
 
 
 class SubmitTaskRequest(BaseModel):
@@ -84,7 +85,7 @@ async def _delete_task(connection: AsyncConnection, task_id: uuid.UUID) -> None:
 
 async def validate_task(body: SubmitTaskRequest) -> SubmitTaskRequest:
     if len(body.quantum_circuit.encode("utf-8")) > MAX_CIRCUIT_BYTES:
-        raise HTTPException(413, f"Circuit is larger than the limit of {MAX_CIRCUIT_BYTES} bytes.")
+        raise HTTPException(413, CIRCUIT_TOO_LARGE_MESSAGE)
     return body
 
 
