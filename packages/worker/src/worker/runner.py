@@ -106,17 +106,24 @@ def classify_exit(child_exit: ChildExit, limits: SimulationLimits) -> Simulation
     )
 
 
-def run(circuit: str, limits: SimulationLimits) -> SimulationOutcome:
-    try:
-        child_exit = run_in_child(
-            simulate, (circuit, limits.shots, limits.max_memory_mb), limits.timeout_seconds
-        )
-    except Exception as exc:
-        # The supervision itself failed (the child couldn't start, or its outcome couldn't be
-        # read). Recording a failure beats leaving the task pending forever.
-        return SimulationFailed(
-            code=ErrorCode.SIMULATION_ERROR,
-            message=f"Simulation could not be run: {type(exc).__name__}.",
-            traceback=traceback.format_exc(),
-        )
-    return classify_exit(child_exit, limits)
+class SimulationRunner:
+    """Simulates circuits within the given limits."""
+
+    def __init__(self, limits: SimulationLimits) -> None:
+        self._limits = limits
+
+    def run(self, circuit: str) -> SimulationOutcome:
+        limits = self._limits
+        try:
+            child_exit = run_in_child(
+                simulate, (circuit, limits.shots, limits.max_memory_mb), limits.timeout_seconds
+            )
+        except Exception as exc:
+            # The supervision itself failed (the child couldn't start, or its outcome couldn't
+            # be read). Recording a failure beats leaving the task pending forever.
+            return SimulationFailed(
+                code=ErrorCode.SIMULATION_ERROR,
+                message=f"Simulation could not be run: {type(exc).__name__}.",
+                traceback=traceback.format_exc(),
+            )
+        return classify_exit(child_exit, limits)

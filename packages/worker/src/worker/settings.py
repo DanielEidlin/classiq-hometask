@@ -2,7 +2,6 @@
 
 import os
 
-from worker.retry import RetryPolicy
 from worker.runner import SimulationLimits
 
 SIMULATION_LIMITS = SimulationLimits(
@@ -19,8 +18,6 @@ DB_TIMEOUT_SECONDS = float(os.environ.get("DB_TIMEOUT_SECONDS", "10"))
 
 # Retrying a database call while the database is unreachable. Giving up should come before
 # RabbitMQ's consumer_timeout, which counts from delivery and so includes the simulation.
-DB_RETRY_POLICY = RetryPolicy(
-    first_delay_seconds=float(os.environ.get("DB_RETRY_FIRST_DELAY_SECONDS", "1")),
-    max_delay_seconds=float(os.environ.get("DB_RETRY_MAX_DELAY_SECONDS", "30")),
-    give_up_seconds=float(os.environ.get("DB_OUTAGE_GIVE_UP_SECONDS", "240")),
-)
+DB_RETRY_FIRST_DELAY_SECONDS = float(os.environ.get("DB_RETRY_FIRST_DELAY_SECONDS", "1"))
+DB_RETRY_MAX_DELAY_SECONDS = float(os.environ.get("DB_RETRY_MAX_DELAY_SECONDS", "30"))
+DB_OUTAGE_GIVE_UP_SECONDS = float(os.environ.get("DB_OUTAGE_GIVE_UP_SECONDS", "240"))

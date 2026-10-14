@@ -14,21 +14,27 @@ policy MAX_ATTEMPTS times in a row fails the task as WORKER_LOST.
 """
 
 import functools
-import time
 import uuid
 from collections.abc import Callable
-from typing import Self, assert_never
+from typing import Protocol, Self, assert_never, cast
 
 import sqlalchemy as sa
 import structlog
+import tenacity
 from pydantic import BaseModel
 
 from common.tasks import ErrorCode, TaskStatus, tasks
-from worker import runner
-from worker.database import DATABASE_UNAVAILABLE_ERRORS, create_db_engine
+from worker.database import create_db_engine, retry_while_unavailable
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
-from worker.retry import RetryPolicy, backoff_delays
-from worker.settings import DB_RETRY_POLICY, DB_TIMEOUT_SECONDS, MAX_ATTEMPTS, SIMULATION_LIMITS
+from worker.runner import SimulationRunner
+from worker.settings import (
+    DB_OUTAGE_GIVE_UP_SECONDS,
+    DB_RETRY_FIRST_DELAY_SECONDS,
+    DB_RETRY_MAX_DELAY_SECONDS,
+    DB_TIMEOUT_SECONDS,
+    MAX_ATTEMPTS,
+    SIMULATION_LIMITS,
+)
 
 log = structlog.get_logger()
 
@@ -36,7 +42,9 @@ WORKER_LOST_MESSAGE = (
     "The worker running the task was lost {max_attempts} times, so it was not run again."
 )
 
-Simulation = Callable[[str], SimulationOutcome]
+
+class CircuitRunner(Protocol):
+    def run(self, circuit: str) -> SimulationOutcome: ...
 
 
 class DatabaseUnavailable(Exception):
@@ -130,31 +138,40 @@ def _log_recorded(task_log: structlog.typing.FilteringBoundLogger, outcome: Simu
             assert_never(outcome)
 
 
+def _log_failed_call(
+    task_log: structlog.typing.FilteringBoundLogger, retry_state: tenacity.RetryCallState
+) -> None:
+    error = retry_state.outcome.exception() if retry_state.outcome is not None else None
+    task_log.error("database_call_failed", failed_calls=retry_state.attempt_number, exc_info=error)
+
+
 class TaskHandler:
     def __init__(
         self,
         engine: sa.Engine,
-        simulation: Simulation,
+        circuit_runner: CircuitRunner,
         max_attempts: int,
-        db_retry_policy: RetryPolicy,
-        sleep: Callable[[float], None] = time.sleep,
-        clock: Callable[[], float] = time.monotonic,
+        retrying: tenacity.Retrying,
     ) -> None:
         self._engine = engine
-        self._simulation = simulation
+        self._circuit_runner = circuit_runner
         self._max_attempts = max_attempts
-        self._db_retry_policy = db_retry_policy
-        self._sleep = sleep
-        self._clock = clock
+        self._retrying = retrying
 
     @classmethod
     def connect(cls, database_url: str) -> Self:
         return cls(
             create_db_engine(database_url, DB_TIMEOUT_SECONDS),
-            functools.partial(runner.run, limits=SIMULATION_LIMITS),
+            SimulationRunner(SIMULATION_LIMITS),
             MAX_ATTEMPTS,
-            DB_RETRY_POLICY,
+            retry_while_unavailable(
+                DB_RETRY_FIRST_DELAY_SECONDS, DB_RETRY_MAX_DELAY_SECONDS, DB_OUTAGE_GIVE_UP_SECONDS
+            ),
         )
+
+    def _in_transaction[T](self, operation: Callable[[sa.Connection], T]) -> T:
+        with self._engine.begin() as connection:
+            return operation(connection)
 
     def _with_retries[T](
         self,
@@ -162,26 +179,12 @@ class TaskHandler:
         operation: Callable[[sa.Connection], T],
     ) -> T:
         """Run `operation` in a transaction, retrying while the database is unreachable."""
-        policy = self._db_retry_policy
-        deadline = self._clock() + policy.give_up_seconds
-        delays = backoff_delays(policy.first_delay_seconds, policy.max_delay_seconds)
-        failed_calls = 0
-        while True:
-            try:
-                with self._engine.begin() as connection:
-                    return operation(connection)
-            except DATABASE_UNAVAILABLE_ERRORS:
-                failed_calls += 1
-                task_log.error("database_call_failed", failed_calls=failed_calls, exc_info=True)
-            remaining = deadline - self._clock()
-            if remaining <= 0:
-                task_log.error(
-                    "database_unavailable",
-                    failed_calls=failed_calls,
-                    give_up_seconds=policy.give_up_seconds,
-                )
-                raise DatabaseUnavailable
-            self._sleep(min(next(delays), remaining))
+        retrying = self._retrying.copy(after=functools.partial(_log_failed_call, task_log))
+        try:
+            return cast(T, retrying(self._in_transaction, operation))
+        except tenacity.RetryError as error:
+            task_log.error("database_unavailable", failed_calls=error.last_attempt.attempt_number)
+            raise DatabaseUnavailable from None
 
     def handle(self, task_id: uuid.UUID) -> None:
         task_log = log.bind(task_id=str(task_id))
@@ -204,7 +207,7 @@ class TaskHandler:
                 message=WORKER_LOST_MESSAGE.format(max_attempts=self._max_attempts),
             )
         else:
-            outcome = self._simulation(claimed.circuit)
+            outcome = self._circuit_runner.run(claimed.circuit)
 
         recorded = self._with_retries(
             task_log, functools.partial(_record, task_id=task_id, outcome=outcome)

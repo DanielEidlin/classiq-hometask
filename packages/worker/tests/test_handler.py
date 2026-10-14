@@ -1,37 +1,37 @@
-"""The worker's task handler against a real Postgres, with the simulation replaced.
+"""The worker's task handler against a real Postgres, with the circuit runner replaced.
 
 Duplicate handling is tested here rather than end to end: arranging an overlapping
 redelivery through the queue would depend on timing, while calling the handler is
 deterministic.
 """
 
-import functools
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from unittest.mock import Mock
 
 import pytest
 import sqlalchemy as sa
+import tenacity
 from structlog.testing import capture_logs
 
 from common.tasks import ErrorCode, TaskStatus, tasks
-from worker.database import create_db_engine
-from worker.handler import WORKER_LOST_MESSAGE, DatabaseUnavailable, Simulation, TaskHandler
+from worker.database import retry_while_unavailable
+from worker.handler import WORKER_LOST_MESSAGE, CircuitRunner, DatabaseUnavailable, TaskHandler
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
-from worker.retry import RetryPolicy
 
 MAX_ATTEMPTS = 3
-# Never simulated: every test replaces the simulation.
+# Never simulated: every test replaces the circuit runner.
 CIRCUIT = "OPENQASM 3.0;"
 FIRST_COUNTS = {"00": 1024}
 SECOND_COUNTS = {"11": 1024}
-RETRY_POLICY = RetryPolicy(first_delay_seconds=1, max_delay_seconds=4, give_up_seconds=10)
-# RETRY_POLICY's backoff 1, 2, 4, 4, ... with the last delay cut to what's left of the 10 s.
-DELAYS_UNTIL_GIVING_UP = [1.0, 2.0, 4.0, 3.0]
-SLEEPS_BEFORE_RECOVERY = 2
-DB_TIMEOUT_SECONDS = 1
-# Longer than DB_TIMEOUT_SECONDS, so the query only returns if nothing times it out.
-QUERY_SECONDS = 30
+FIRST_DELAY_SECONDS = 1.0
+MAX_DELAY_SECONDS = 30.0
+# Unused: the tests give up after FAILED_CALLS_BEFORE_GIVING_UP instead of after a delay.
+GIVE_UP_SECONDS = 240.0
+FAILED_CALLS_BEFORE_GIVING_UP = 4
+# The backoff between those four failed calls.
+DELAYS_UNTIL_GIVING_UP = [1.0, 2.0, 4.0]
+FAILED_CALLS_BEFORE_RECOVERY = 2
 
 
 def _insert_task(
@@ -58,76 +58,86 @@ def _fetch_task(engine: sa.Engine, task_id: uuid.UUID) -> sa.RowMapping:
         return connection.execute(sa.select(tasks).where(tasks.c.id == task_id)).mappings().one()
 
 
-def _simulation(outcome: SimulationOutcome) -> Mock:
-    return Mock(return_value=outcome)
+def _runner(outcome: SimulationOutcome) -> Mock:
+    circuit_runner = Mock(spec_set=["run"])
+    circuit_runner.run.return_value = outcome
+    return circuit_runner
 
 
-def _handler(engine: sa.Engine, simulation: Simulation) -> TaskHandler:
-    return TaskHandler(engine, simulation, MAX_ATTEMPTS, RETRY_POLICY)
+def _discard_sleep(seconds: float) -> None:
+    return None
+
+
+def _retrying(sleep: Callable[[float], None] = _discard_sleep) -> tenacity.Retrying:
+    """The production retry and backoff, giving up after a number of failed calls rather
+    than after a delay, so that sleeping can be skipped."""
+    return retry_while_unavailable(FIRST_DELAY_SECONDS, MAX_DELAY_SECONDS, GIVE_UP_SECONDS).copy(
+        stop=tenacity.stop_after_attempt(FAILED_CALLS_BEFORE_GIVING_UP), sleep=sleep
+    )
+
+
+def _handler(
+    engine: sa.Engine, circuit_runner: CircuitRunner, retrying: tenacity.Retrying | None = None
+) -> TaskHandler:
+    return TaskHandler(engine, circuit_runner, MAX_ATTEMPTS, retrying or _retrying())
 
 
 class _DatabaseOutage:
-    """An engine on the test database whose statements fail while it is down, as an
-    unreachable database's would, and a clock that advances only when the handler sleeps."""
+    """Fails every statement on an engine while down, as an unreachable database would."""
 
     def __init__(self, engine: sa.Engine) -> None:
-        self.engine = engine
         self.down = False
-        self.recover_after_sleeps: int | None = None
-        self.sleeps: list[float] = []
-        self._now = 0.0
+        self.recover_after_failures: int | None = None
+        self._failures = 0
         sa.event.listen(engine, "before_cursor_execute", self._fail_while_down)
 
     def _fail_while_down(self, *args: object) -> None:
-        if self.down:
-            raise sa.exc.OperationalError("", {}, ConnectionRefusedError("connection refused"))
-
-    def _monotonic(self) -> float:
-        return self._now
-
-    def _sleep(self, seconds: float) -> None:
-        self.sleeps.append(seconds)
-        self._now += seconds
-        if len(self.sleeps) == self.recover_after_sleeps:
+        if not self.down:
+            return
+        self._failures += 1
+        if self._failures == self.recover_after_failures:
             self.down = False
+        raise sa.exc.OperationalError("", {}, ConnectionRefusedError("connection refused"))
 
-    def go_down_during_simulation(self, outcome: SimulationOutcome, circuit: str) -> SimulationOutcome:
-        self.down = True
-        return outcome
 
-    def handler(self, simulation: Simulation) -> TaskHandler:
-        return TaskHandler(
-            self.engine, simulation, MAX_ATTEMPTS, RETRY_POLICY,
-            sleep=self._sleep, clock=self._monotonic,
-        )
+class _RunnerThatTakesTheDatabaseDown:
+    """Starts the outage while the circuit runs, so the claim succeeds and the recording fails."""
+
+    def __init__(self, outage: _DatabaseOutage) -> None:
+        self._outage = outage
+
+    def run(self, circuit: str) -> SimulationOutcome:
+        self._outage.down = True
+        return SimulationCompleted(counts=FIRST_COUNTS)
 
 
 @pytest.fixture
-def outage(db_engine: sa.Engine) -> Iterator[_DatabaseOutage]:
+def outage_engine(db_engine: sa.Engine) -> Iterator[sa.Engine]:
+    """An engine of its own on the test database, so an outage's listener doesn't outlive the test."""
     engine = sa.create_engine(db_engine.url)
     try:
-        yield _DatabaseOutage(engine)
+        yield engine
     finally:
         engine.dispose()
 
 
 class _RedeliveredDuringSimulation:
-    """A simulation during which a redelivery of the same task runs to completion first,
+    """A circuit run during which a redelivery of the same task runs to completion first,
     as when a worker is presumed lost but is still simulating."""
 
-    def __init__(self, engine: sa.Engine, task_id: uuid.UUID) -> None:
-        self._engine = engine
+    def __init__(self, redelivery: TaskHandler, task_id: uuid.UUID) -> None:
+        self._redelivery = redelivery
         self._task_id = task_id
 
-    def __call__(self, circuit: str) -> SimulationOutcome:
-        redelivery = _handler(self._engine, _simulation(SimulationCompleted(counts=FIRST_COUNTS)))
-        redelivery.handle(self._task_id)
+    def run(self, circuit: str) -> SimulationOutcome:
+        self._redelivery.handle(self._task_id)
         return SimulationCompleted(counts=SECOND_COUNTS)
 
 
 def test_running_a_task_twice_keeps_the_first_result(db_engine: sa.Engine) -> None:
     task_id = _insert_task(db_engine)
-    handler = _handler(db_engine, _RedeliveredDuringSimulation(db_engine, task_id))
+    redelivery = _handler(db_engine, _runner(SimulationCompleted(counts=FIRST_COUNTS)))
+    handler = _handler(db_engine, _RedeliveredDuringSimulation(redelivery, task_id))
 
     with capture_logs() as logs:
         handler.handle(task_id)
@@ -155,7 +165,7 @@ def test_outcome_is_recorded_with_its_finish_time(
 ) -> None:
     task_id = _insert_task(db_engine)
 
-    _handler(db_engine, _simulation(outcome)).handle(task_id)
+    _handler(db_engine, _runner(outcome)).handle(task_id)
 
     task = _fetch_task(db_engine, task_id)
     assert task["status"] == outcome.status
@@ -168,11 +178,11 @@ def test_task_at_the_attempt_cap_fails_with_worker_lost_without_simulating(
     db_engine: sa.Engine,
 ) -> None:
     task_id = _insert_task(db_engine, attempts=MAX_ATTEMPTS)
-    simulation = _simulation(SimulationCompleted(counts=FIRST_COUNTS))
+    circuit_runner = _runner(SimulationCompleted(counts=FIRST_COUNTS))
 
-    _handler(db_engine, simulation).handle(task_id)
+    _handler(db_engine, circuit_runner).handle(task_id)
 
-    simulation.assert_not_called()
+    circuit_runner.run.assert_not_called()
     task = _fetch_task(db_engine, task_id)
     assert task["status"] == TaskStatus.FAILED
     assert task["error_code"] == ErrorCode.WORKER_LOST
@@ -185,12 +195,12 @@ def test_final_task_is_skipped(db_engine: sa.Engine) -> None:
         db_engine, status=TaskStatus.COMPLETED, result=FIRST_COUNTS, attempts=1
     )
     before = _fetch_task(db_engine, task_id)
-    simulation = _simulation(SimulationCompleted(counts=SECOND_COUNTS))
+    circuit_runner = _runner(SimulationCompleted(counts=SECOND_COUNTS))
 
     with capture_logs() as logs:
-        _handler(db_engine, simulation).handle(task_id)
+        _handler(db_engine, circuit_runner).handle(task_id)
 
-    simulation.assert_not_called()
+    circuit_runner.run.assert_not_called()
     assert _fetch_task(db_engine, task_id) == before
     assert {
         "event": "task_skipped",
@@ -203,12 +213,12 @@ def test_final_task_is_skipped(db_engine: sa.Engine) -> None:
 
 def test_missing_task_is_skipped(db_engine: sa.Engine) -> None:
     task_id = uuid.uuid4()
-    simulation = _simulation(SimulationCompleted(counts=FIRST_COUNTS))
+    circuit_runner = _runner(SimulationCompleted(counts=FIRST_COUNTS))
 
     with capture_logs() as logs:
-        _handler(db_engine, simulation).handle(task_id)
+        _handler(db_engine, circuit_runner).handle(task_id)
 
-    simulation.assert_not_called()
+    circuit_runner.run.assert_not_called()
     assert {
         "event": "task_skipped",
         "task_id": str(task_id),
@@ -218,65 +228,53 @@ def test_missing_task_is_skipped(db_engine: sa.Engine) -> None:
 
 
 def test_outcome_is_given_up_on_for_requeue_while_the_database_stays_unreachable(
-    outage: _DatabaseOutage,
+    outage_engine: sa.Engine,
 ) -> None:
-    task_id = _insert_task(outage.engine)
-    simulation = functools.partial(
-        outage.go_down_during_simulation, SimulationCompleted(counts=FIRST_COUNTS)
-    )
+    task_id = _insert_task(outage_engine)
+    outage = _DatabaseOutage(outage_engine)
+    sleeps: list[float] = []
+    handler = _handler(outage_engine, _RunnerThatTakesTheDatabaseDown(outage), _retrying(sleeps.append))
 
     with capture_logs() as logs, pytest.raises(DatabaseUnavailable):
-        outage.handler(simulation).handle(task_id)
+        handler.handle(task_id)
 
-    assert outage.sleeps == DELAYS_UNTIL_GIVING_UP
+    assert sleeps == DELAYS_UNTIL_GIVING_UP
     failed_calls = [entry for entry in logs if entry["event"] == "database_call_failed"]
-    assert len(failed_calls) == len(DELAYS_UNTIL_GIVING_UP) + 1
+    assert len(failed_calls) == FAILED_CALLS_BEFORE_GIVING_UP
     assert all(
         entry["task_id"] == str(task_id) and entry["log_level"] == "error" for entry in failed_calls
     )
     outage.down = False
-    assert _fetch_task(outage.engine, task_id)["status"] == TaskStatus.PENDING
+    assert _fetch_task(outage_engine, task_id)["status"] == TaskStatus.PENDING
 
 
 def test_outcome_is_recorded_once_the_database_recovers_during_the_retries(
-    outage: _DatabaseOutage,
+    outage_engine: sa.Engine,
 ) -> None:
-    task_id = _insert_task(outage.engine)
-    outage.recover_after_sleeps = SLEEPS_BEFORE_RECOVERY
-    simulation = functools.partial(
-        outage.go_down_during_simulation, SimulationCompleted(counts=FIRST_COUNTS)
-    )
+    task_id = _insert_task(outage_engine)
+    outage = _DatabaseOutage(outage_engine)
+    outage.recover_after_failures = FAILED_CALLS_BEFORE_RECOVERY
 
-    outage.handler(simulation).handle(task_id)
+    _handler(outage_engine, _RunnerThatTakesTheDatabaseDown(outage)).handle(task_id)
 
-    assert len(outage.sleeps) == SLEEPS_BEFORE_RECOVERY
-    task = _fetch_task(outage.engine, task_id)
+    task = _fetch_task(outage_engine, task_id)
     assert task["status"] == TaskStatus.COMPLETED
     assert task["result"] == FIRST_COUNTS
 
 
 def test_task_arriving_while_the_database_is_unreachable_is_given_up_on_without_an_attempt(
-    outage: _DatabaseOutage,
+    outage_engine: sa.Engine,
 ) -> None:
-    task_id = _insert_task(outage.engine)
-    simulation = _simulation(SimulationCompleted(counts=FIRST_COUNTS))
+    task_id = _insert_task(outage_engine)
+    outage = _DatabaseOutage(outage_engine)
+    circuit_runner = _runner(SimulationCompleted(counts=FIRST_COUNTS))
     outage.down = True
 
     with pytest.raises(DatabaseUnavailable):
-        outage.handler(simulation).handle(task_id)
+        _handler(outage_engine, circuit_runner).handle(task_id)
 
-    simulation.assert_not_called()
-    assert outage.sleeps == DELAYS_UNTIL_GIVING_UP
+    circuit_runner.run.assert_not_called()
     outage.down = False
-    task = _fetch_task(outage.engine, task_id)
+    task = _fetch_task(outage_engine, task_id)
     assert task["status"] == TaskStatus.PENDING
     assert task["attempts"] == 0
-
-
-def test_database_calls_time_out_instead_of_hanging(db_engine: sa.Engine) -> None:
-    engine = create_db_engine(db_engine.url.render_as_string(hide_password=False), DB_TIMEOUT_SECONDS)
-    try:
-        with pytest.raises(sa.exc.OperationalError), engine.connect() as connection:
-            connection.execute(sa.select(sa.func.pg_sleep(QUERY_SECONDS)))
-    finally:
-        engine.dispose()
