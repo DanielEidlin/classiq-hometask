@@ -50,6 +50,14 @@ class ComposeStack:
     def start(self, service: str) -> None:
         compose("start", service)
 
+    def execute_sql(self, statement: str) -> None:
+        # Postgres publishes no port to the host, so the statement runs through `psql` in its container.
+        compose(
+            "exec", "-T", "postgres",
+            "psql", "--username", "tasks", "--dbname", "tasks", "-v", "ON_ERROR_STOP=1",
+            "--command", statement,
+        )
+
     def restart(self, service: str) -> None:
         # `restart` returns once the container is running, not once it is healthy.
         compose("restart", service)
