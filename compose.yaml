@@ -75,6 +75,7 @@ services:
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       TASK_TIMEOUT_SECONDS: ${TASK_TIMEOUT_SECONDS:-60}
       AER_MAX_MEMORY_MB: ${AER_MAX_MEMORY_MB:-1700}
+      MAX_ATTEMPTS: ${MAX_ATTEMPTS:-3}
     deploy:
       replicas: 2
       resources:

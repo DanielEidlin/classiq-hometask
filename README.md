@@ -205,7 +205,7 @@ All values are configurable through environment variables and the Compose file.
 **Decision.** Three layers, all run in CI (GitHub Actions) on every push:
 
 - **Unit tests** for logic that is intricate in isolation: the Celery message encoder and failure classification.
-- **Duplicate-handling tests** against a real Postgres: the worker's task function runs twice for the same task, and the second result must be discarded.
+- **Duplicate-handling tests** against a real Postgres: the worker's task handler runs a task twice, overlapping, and the second result must be discarded.
 - **Integration tests**, black-box over HTTP against the full Compose stack, which a pytest fixture starts with `docker compose up --wait` (blocking until every health check passes). A test override file shortens limits so slow cases run quickly (a 15 s timeout, a small queue cap).
 
 | Group | Tests |
@@ -221,7 +221,7 @@ All values are configurable through environment variables and the Compose file.
 - **The broker-restart test asserts completion rather than sampling queue depth.** Published tasks have no recovery path other than their RabbitMQ message (the sweeper only republishes unpublished tasks), so if the restart lost them they would stay `pending` and the test would fail. Completion proves the messages survived and remained consumable. The test documents this assumption, since a future mechanism that republishes stale tasks would mask message loss.
 - **Isolation.** Resilience tests are marked and run after the core tests, and each restores the stack in a `finally` block, so one failure cannot cascade.
 - **Tests run from the host.** Killing and restarting containers needs the Docker CLI, which a containerised test runner could only reach by mounting the Docker socket.
-- **Duplicate handling is tested below the HTTP layer** because arranging an overlapping redelivery end to end would depend on timing; calling the task function directly is deterministic.
+- **Duplicate handling is tested below the HTTP layer** because arranging an overlapping redelivery end to end would depend on timing; calling the task handler directly is deterministic.
 
 ### 14. The sweeper is a dedicated service
 

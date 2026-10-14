@@ -4,8 +4,9 @@ from collections.abc import Iterator
 
 import httpx
 import pytest
+import sqlalchemy as sa
 
-from stack import API_PORT, WAIT_TIMEOUT_SECONDS, ComposeStack, compose
+from stack import API_PORT, DATABASE_URL, WAIT_TIMEOUT_SECONDS, ComposeStack, compose
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
@@ -27,3 +28,13 @@ def compose_stack() -> Iterator[ComposeStack]:
 def api(compose_stack: ComposeStack) -> Iterator[httpx.Client]:
     with httpx.Client(base_url=f"http://localhost:{API_PORT}", timeout=10) as client:
         yield client
+
+
+@pytest.fixture(scope="session")
+def db_engine(compose_stack: ComposeStack) -> Iterator[sa.Engine]:
+    """The stack's Postgres, migrated by the stack's `migrate` service."""
+    engine = sa.create_engine(DATABASE_URL)
+    try:
+        yield engine
+    finally:
+        engine.dispose()
