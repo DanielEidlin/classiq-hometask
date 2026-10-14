@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from api.dependencies import DbConnectionDep, PublisherDep
+from common.publisher import PublishFailed
 from common.tasks import TaskStatus, tasks
 
 log = structlog.get_logger()
@@ -18,6 +19,7 @@ log = structlog.get_logger()
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
 MAX_CIRCUIT_BYTES = int(os.environ.get("MAX_CIRCUIT_BYTES", "65536"))
+RETRY_AFTER_SECONDS = int(os.environ.get("RETRY_AFTER_SECONDS", "5"))
 
 
 class SubmitTaskRequest(BaseModel):
@@ -76,6 +78,11 @@ async def _fetch_outcome(connection: AsyncConnection, task_id: uuid.UUID) -> Tas
     return None if row is None else _task_outcome.validate_python(dict(row._mapping))
 
 
+async def _delete_task(connection: AsyncConnection, task_id: uuid.UUID) -> None:
+    async with connection.begin():
+        await connection.execute(tasks.delete().where(tasks.c.id == task_id))
+
+
 async def validate_task(body: SubmitTaskRequest) -> SubmitTaskRequest:
     if len(body.quantum_circuit.encode("utf-8")) > MAX_CIRCUIT_BYTES:
         raise HTTPException(413, f"Circuit is larger than the limit of {MAX_CIRCUIT_BYTES} bytes.")
@@ -91,7 +98,18 @@ async def submit_task(
     task_id = uuid.uuid4()
     async with connection.begin():
         await connection.execute(tasks.insert().values(id=task_id, circuit=body.quantum_circuit))
-    await publisher.publish(task_id)
+    try:
+        await publisher.publish(task_id)
+    except PublishFailed:
+        # Not accepted, so the row must go: otherwise the sweeper would later publish a
+        # task whose ID the client never received.
+        log.warning("task_shed", task_id=str(task_id), exc_info=True)
+        await _delete_task(connection, task_id)
+        raise HTTPException(
+            503,
+            "The service is busy. Retry the task later.",
+            headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
+        ) from None
     async with connection.begin():
         await connection.execute(tasks.update().where(tasks.c.id == task_id).values(published=True))
     log.info("task_accepted", task_id=str(task_id))

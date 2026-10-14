@@ -6,12 +6,22 @@ Celery worker consumes it natively, without the publishers depending on Celery.
 """
 
 import json
+import os
 import uuid
 
 import aio_pika
 
 PROCESS_TASK_NAME = "worker.process"
 TASK_QUEUE = "tasks"
+MAX_QUEUED_TASKS = int(os.environ.get("MAX_QUEUED_TASKS", "10000"))
+
+# Every declaration of the task queue must pass the same arguments: RabbitMQ refuses to
+# redeclare a queue with different ones. `reject-publish` makes a full queue nack new
+# messages; the default, `drop-head`, would silently discard the oldest accepted tasks.
+TASK_QUEUE_ARGUMENTS: dict[str, object] = {
+    "x-max-length": MAX_QUEUED_TASKS,
+    "x-overflow": "reject-publish",
+}
 
 
 def encode_task_message(task_id: uuid.UUID) -> aio_pika.Message:
