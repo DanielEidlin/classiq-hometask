@@ -39,7 +39,10 @@ async def validate_task(body: SubmitTaskRequest) -> SubmitTaskRequest:
     responses={
         400: {"model": ErrorResponse, "description": "Malformed body"},
         413: {"model": ErrorResponse, "description": "Circuit larger than MAX_CIRCUIT_BYTES"},
-        503: {"model": ErrorResponse, "description": "Queue full or broker unavailable"},
+        503: {
+            "model": ErrorResponse,
+            "description": "Queue full, or the broker or database unavailable",
+        },
     },
 )
 async def submit_task(
@@ -65,7 +68,11 @@ async def submit_task(
 
 
 @router.get(
-    "/{task_id}", responses={404: {"model": ErrorResponse, "description": "Task not found"}}
+    "/{task_id}",
+    responses={
+        404: {"model": ErrorResponse, "description": "Task not found"},
+        503: {"model": ErrorResponse, "description": "Database unavailable"},
+    },
 )
 async def get_task(
     task_id: str, task_store: TaskStoreDep

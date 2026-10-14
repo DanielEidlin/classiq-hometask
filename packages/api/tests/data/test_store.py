@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from api.data.store import PostgresTaskStore
+from api.domain.abstractions import DatabaseUnavailable
 from api.domain.outcomes import CompletedOutcome, FailedOutcome, PendingOutcome
 from common.data.tables import tasks
 from common.domain.tasks import ErrorCode, TaskStatus
@@ -117,5 +118,19 @@ async def test_reachability_reflects_whether_postgres_answers(engine: AsyncEngin
     try:
         assert await PostgresTaskStore(engine).is_reachable()
         assert not await PostgresTaskStore(unreachable).is_reachable()
+    finally:
+        await unreachable.dispose()
+
+
+async def test_calls_raise_database_unavailable_while_postgres_is_unreachable() -> None:
+    unreachable = create_async_engine(
+        UNREACHABLE_DATABASE_URL, connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS}
+    )
+    store = PostgresTaskStore(unreachable)
+    try:
+        with pytest.raises(DatabaseUnavailable):
+            await store.insert_task(uuid.uuid4(), CIRCUIT)
+        with pytest.raises(DatabaseUnavailable):
+            await store.fetch_outcome(uuid.uuid4())
     finally:
         await unreachable.dispose()

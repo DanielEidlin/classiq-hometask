@@ -75,6 +75,7 @@ Counts always sum to the worker's shot count (1024 by default). Poll until `stat
 | 400 | `{"status": "error", "message": "body.qc: Field required"}` | The body isn't JSON, or `qc` is missing, not a string or empty; the message names the problem |
 | 413 | `{"status": "error", "message": "Circuit is larger than the limit of 65536 bytes."}` | The circuit exceeds `MAX_CIRCUIT_BYTES` |
 | 503 | `{"status": "error", "message": "The service is busy. Submit the task again later."}` | The queue is full or RabbitMQ is unavailable; the `Retry-After` header says when to retry, and the task was not accepted |
+| 503 | `{"status": "error", "message": "The service is temporarily unavailable. Try again later."}` | Postgres is unreachable; with `Retry-After` |
 
 `GET /tasks/{task_id}`
 
@@ -84,6 +85,7 @@ Counts always sum to the worker's shot count (1024 by default). Poll until `stat
 | 200 | `{"status": "completed", "result": {"00": 518, "11": 506}}` | Simulated; `result` maps each measured bitstring to its count |
 | 200 | `{"status": "error", "message": "<reason>"}` | The task failed; see below |
 | 404 | `{"status": "error", "message": "Task not found."}` | No task has this ID (including IDs that aren't UUIDs) |
+| 503 | `{"status": "error", "message": "The service is temporarily unavailable. Try again later."}` | Postgres is unreachable; with `Retry-After` |
 
 A failed task's `message` explains why. Examples:
 
@@ -103,7 +105,7 @@ A failed task's `message` explains why. Examples:
 | 200 | `{"status": "ok"}` | Postgres and RabbitMQ are reachable |
 | 503 | `{"status": "error", "message": "Postgres is unreachable."}` (or `RabbitMQ`) | A dependency is down |
 
-Any unexpected server error returns 500 with `{"status": "error", "message": "Internal server error."}`.
+Any route returns 500 with `{"status": "error", "message": "Internal server error."}` on an unexpected server error. The interactive docs list every one of these responses.
 
 ## Architecture
 
@@ -170,6 +172,7 @@ sequenceDiagram
 What happens when something goes wrong along this path:
 
 - **RabbitMQ rejects or doesn't confirm the publish (steps 3–4):** the API deletes the row and answers 503 (decision 11).
+- **Postgres is unreachable when the API stores or reads a task:** the API answers 503 with `Retry-After`; a task that couldn't be stored was not accepted (decision 17).
 - **The API crashes between storing and marking published (steps 2–5):** the sweeper publishes the task after a grace period (decision 14).
 - **The worker dies mid-task:** the message was never acknowledged, so RabbitMQ redelivers it. Each delivery counts an attempt; past `MAX_ATTEMPTS` the task fails with `WORKER_LOST` (decision 5).
 - **The task is delivered twice:** both writes are conditional on the task being `pending`, so the first outcome recorded wins (decision 10).
@@ -456,7 +459,7 @@ All values are configurable through environment variables and the Compose file.
 
 **Decision.** Three layers, all run in CI (GitHub Actions) on every push:
 
-- **Unit tests** for logic that is intricate in isolation: the Celery message encoder and its contract with the worker (the message names a task the worker registers, and its arguments fit that task's signature), the publisher's failure handling, failure classification, the database retry policy, and the sweeper's loop and health check. The API's routes, the worker's task handler and the sweeper's pass run against in-memory fakes of their task stores: request validation and load shedding, skipping a final or missing task, the attempt cap, stopping before simulating when the database is unreachable, and skipping a rejected publish. The simulation runner's tests simulate real circuits with Aer, covering counts, invalid QASM3, no measurements, too large for the memory budget, a timeout and an unexpected simulator error.
+- **Unit tests** for logic that is intricate in isolation: the Celery message encoder and its contract with the worker (the message names a task the worker registers, and its arguments fit that task's signature), the publisher's failure handling, failure classification, the database retry policy, and the sweeper's loop and health check. The API's routes, the worker's task handler and the sweeper's pass run against in-memory fakes of their task stores: request validation, load shedding, 503 while the database is unreachable, the documented responses, skipping a final or missing task, the attempt cap, stopping before simulating when the database is unreachable, and skipping a rejected publish. The simulation runner's tests simulate real circuits with Aer, covering counts, invalid QASM3, no measurements, too large for the memory budget, a timeout and an unexpected simulator error.
 - **Task-store tests against a real Postgres**, in a throwaway container started by testcontainers: each service's statements, behind the interface the rest of its code uses. The worker's store keeps the first of two recorded outcomes, counts attempts, and retries and then gives up while the database is unreachable. The sweeper's store skips tasks another batch holds and finds stale tasks. The API's store reads each stored outcome back in its response shape.
 - **Integration tests**, black-box over HTTP against the full Compose stack, which a pytest fixture starts with `docker compose up --wait` (blocking until every health check passes). A test override file shortens the worker's time limit to 15 s, so the slow cases run quickly, and publishes Postgres's port, so tests can inspect and arrange task rows. The queue-full test lowers the queue cap with a temporary RabbitMQ policy.
 
@@ -534,12 +537,14 @@ All values are configurable through environment variables and the Compose file.
 | Unknown task ID, or one that isn't a UUID | 404 |
 | Circuit larger than `MAX_CIRCUIT_BYTES` | 413 |
 | Unexpected server error | 500 |
-| Queue full or broker unavailable | 503, with `Retry-After` |
+| Queue full, broker unavailable, or Postgres unreachable | 503, with `Retry-After` |
 
 **Rationale.**
 
 - **202** is the standard code for a request accepted for processing that has not completed, which is exactly what task submission is.
 - **One error shape.** FastAPI's default validation response (422 with a `detail` array) differs from every other error this API returns. Converting it lets clients handle all errors the same way.
+- **An unreachable database is 503, not 500.** The outage is temporary and the request may succeed if repeated, which is what 503 with `Retry-After` tells a client; 500 says the server is broken. The API's task store raises `DatabaseUnavailable` for the same errors the worker treats as an outage (decision 18), and one exception handler turns it into the 503. Any other database error remains a 500. On `POST /tasks` a 503 can still precede a run in one case: if Postgres becomes unreachable after the publish, while marking the task published or deleting it, the task may run, but its ID was never returned, so no one reads it (as in decision 11).
+- **The docs list every response.** Each route declares its error responses, the 500 that any route can return is added to all of them, and FastAPI's default 422, which this API never returns, is removed, so `/docs` matches the behaviour.
 
 ### 18. Tasks stuck in `pending`
 

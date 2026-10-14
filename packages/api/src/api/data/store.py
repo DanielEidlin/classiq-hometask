@@ -4,14 +4,18 @@ Each call checks a connection out of the engine's pool and returns it, so no con
 held while a request waits on something else, such as a publish.
 """
 
+import contextlib
 import uuid
+from collections.abc import Iterator
 
 import sqlalchemy as sa
 import structlog
 from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncEngine
 
+from api.domain.abstractions import DatabaseUnavailable
 from api.domain.outcomes import TaskOutcome
+from common.data.database import DATABASE_UNAVAILABLE_ERRORS
 from common.data.tables import tasks
 
 log = structlog.get_logger()
@@ -19,30 +23,42 @@ log = structlog.get_logger()
 _task_outcome = TypeAdapter[TaskOutcome](TaskOutcome)
 
 
+@contextlib.contextmanager
+def _unavailable_as_domain_error() -> Iterator[None]:
+    try:
+        yield
+    except DATABASE_UNAVAILABLE_ERRORS as error:
+        raise DatabaseUnavailable from error
+
+
 class PostgresTaskStore:
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
 
     async def insert_task(self, task_id: uuid.UUID, circuit: str) -> None:
-        async with self._engine.begin() as connection:
-            await connection.execute(tasks.insert().values(id=task_id, circuit=circuit))
+        with _unavailable_as_domain_error():
+            async with self._engine.begin() as connection:
+                await connection.execute(tasks.insert().values(id=task_id, circuit=circuit))
 
     async def mark_published(self, task_id: uuid.UUID) -> None:
-        async with self._engine.begin() as connection:
-            await connection.execute(
-                tasks.update().where(tasks.c.id == task_id).values(published=True)
-            )
+        with _unavailable_as_domain_error():
+            async with self._engine.begin() as connection:
+                await connection.execute(
+                    tasks.update().where(tasks.c.id == task_id).values(published=True)
+                )
 
     async def delete_task(self, task_id: uuid.UUID) -> None:
-        async with self._engine.begin() as connection:
-            await connection.execute(tasks.delete().where(tasks.c.id == task_id))
+        with _unavailable_as_domain_error():
+            async with self._engine.begin() as connection:
+                await connection.execute(tasks.delete().where(tasks.c.id == task_id))
 
     async def fetch_outcome(self, task_id: uuid.UUID) -> TaskOutcome | None:
         query = sa.select(tasks.c.status, tasks.c.result, tasks.c.error_message).where(
             tasks.c.id == task_id
         )
-        async with self._engine.connect() as connection:
-            row = (await connection.execute(query)).one_or_none()
+        with _unavailable_as_domain_error():
+            async with self._engine.connect() as connection:
+                row = (await connection.execute(query)).one_or_none()
         return None if row is None else _task_outcome.validate_python(dict(row._mapping))
 
     async def is_reachable(self) -> bool:
