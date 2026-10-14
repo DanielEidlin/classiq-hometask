@@ -8,7 +8,8 @@ import sqlalchemy as sa
 from pydantic import BaseModel
 
 from api_client import POLL_INTERVAL_SECONDS, TASK_DEADLINE_SECONDS
-from common.tasks import TaskStatus, tasks
+from common.data.tables import tasks
+from common.domain.tasks import TaskStatus
 
 
 class TaskProgress(BaseModel):

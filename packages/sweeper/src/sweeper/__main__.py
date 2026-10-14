@@ -7,17 +7,17 @@ import signal
 import structlog
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from common.data.publisher import TaskPublisher
 from common.log import configure_logging
-from common.publisher import TaskPublisher
-from sweeper.loop import sweep_until_stopped
+from sweeper.business.sweeper import Sweeper
+from sweeper.data.store import PostgresTaskStore
+from sweeper.presentation.loop import sweep_until_stopped
 from sweeper.settings import (
     STALE_TASK_AFTER,
     SWEEP_GRACE,
     SWEEP_INTERVAL_SECONDS,
     SWEEPER_HEARTBEAT_FILE,
 )
-from sweeper.store import PostgresTaskStore
-from sweeper.sweeper import Sweeper
 
 log = structlog.get_logger()
 

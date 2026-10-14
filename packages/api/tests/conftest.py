@@ -11,10 +11,10 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from testcontainers.postgres import PostgresContainer
 
-from api.dependencies import get_publisher, get_task_store
 from api.main import app
-from common.publisher import TaskPublisher
-from common.tasks import metadata
+from api.presentation.dependencies import get_publisher, get_task_store
+from common.data.publisher import TaskPublisher
+from common.data.tables import metadata
 from fakes.api_task_store import FakeTaskStore
 
 POSTGRES_IMAGE = "postgres:16-alpine"

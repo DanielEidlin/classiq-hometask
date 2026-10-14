@@ -3,7 +3,7 @@ import os
 import sqlalchemy as sa
 from alembic import context
 
-from common.tasks import metadata
+from common.data.tables import metadata
 
 config = context.config
 if config.config_file_name is not None:

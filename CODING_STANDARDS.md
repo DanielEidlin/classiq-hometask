@@ -9,18 +9,29 @@ Conventions for code in this repository, drawn from review. Tooling already enfo
 - When an external contract fixes a terse name (the API's `qc` field), keep it at the boundary only and map it to a readable name with an alias.
 - A library's own idioms stay as they are (SQLAlchemy's `table.c`).
 
+## Layers
+
+Each package splits its code into tiers, from top to bottom:
+
+- `presentation/`: entry-point code. FastAPI routers and dependencies, the Celery task body, the sweeper loop.
+- `business/`: logic. The task handler, the simulation runner, the sweeper.
+- `data/`: outside systems. Postgres stores and tables, the database engine, the publisher and queue encoding, the heartbeat file.
+- `domain/`: models, enums and outcomes, and the `Protocol`s in `abstractions.py`.
+
+A tier imports only from the tiers below it, so `data` implements the `domain` protocols without importing `business`. The package root is the composition root (`main.py`, `app.py`, `tasks.py`, `__main__.py`, the `health.py` probe): it builds the concrete parts and may import any tier, but no tier imports it. The exception is `settings.py` (and `common/log.py`): they only read the environment, so any tier may import them. A tier folder exists only when it has modules. Each package's tests mirror its tiers (`tests/business/test_handler.py`); tests of the root sit in `tests/`.
+
 ## Structure
 
 - No nested functions. Write a private module-level function (`_name`) and bind arguments with `functools.partial` where needed.
-- One module per FastAPI router (`api/tasks.py`, `api/health.py`). `api/main.py` only builds the app, registers routers and installs error handling.
-- The API's Pydantic models (request and response bodies, stored outcomes) live in `api/models.py`; router modules hold only routes and the code they call.
-- Each service's database statements live in its `store.py`, behind the `TaskStore` protocol the rest of the service uses; `PostgresTaskStore` implements it. Each statement is written out in full in the store method named after what it does (`insert_task`, `fetch_outcome`), returning a typed result. Where the store runs every call through a wrapper, as the worker's retries do, the statement is a module function taking the connection (`_start_attempt`). Write the query out in full; pass several conditions to `.where(...)` rather than building `sa.and_(...)` in a separate variable.
+- One module per FastAPI router (`api/presentation/tasks.py`, `api/presentation/health.py`). `api/main.py` only builds the app, registers routers and installs error handling.
+- The API's request and response bodies live in `api/presentation/schemas.py`, and the stored outcomes in `api/domain/outcomes.py`; router modules hold only routes and the code they call.
+- Each service's database statements live in its `data/store.py`, behind the `TaskStore` protocol the rest of the service uses; `PostgresTaskStore` implements it. Each statement is written out in full in the store method named after what it does (`insert_task`, `fetch_outcome`), returning a typed result. Where the store runs every call through a wrapper, as the worker's retries do, the statement is a module function taking the connection (`_start_attempt`). Write the query out in full; pass several conditions to `.where(...)` rather than building `sa.and_(...)` in a separate variable.
 
 ## Dependencies and state
 
 - Code receives its collaborators; it doesn't reach for globals.
-  - In the API, routes declare FastAPI dependencies (`api/dependencies.py`), using the `Annotated[..., Depends(...)]` shorthands (`TaskStoreDep`, `PublisherDep`). Resources that need async setup and teardown are opened by the lifespan and yielded as lifespan state, typed by `AppState`; nothing writes to `app.state`.
-  - Where a service's code depends on an interface rather than a concrete class, the interface is a `Protocol` in that service's `abstractions.py`, beside the exceptions and models they promise (`DatabaseUnavailable`, `StartedAttempt`).
+  - In the API, routes declare FastAPI dependencies (`api/presentation/dependencies.py`), using the `Annotated[..., Depends(...)]` shorthands (`TaskStoreDep`, `PublisherDep`). Resources that need async setup and teardown are opened by the lifespan and yielded as lifespan state, typed by `AppState`; nothing writes to `app.state`.
+  - Where a service's code depends on an interface rather than a concrete class, the interface is a `Protocol` in that service's `domain/abstractions.py`, beside the exceptions and models they promise (`DatabaseUnavailable`, `StartedAttempt`).
   - Classes take their collaborators in the constructor, so tests can pass their own. A classmethod builds the production instance (`TaskPublisher.connect(url)`).
 - Module-level objects are fine when building them has no side effects (a SQLAlchemy `Table`, a router). Anything that opens connections or does I/O is created at startup or on first use, never at import. A connection pool that must not cross a `fork` is created lazily (`functools.cache`).
 

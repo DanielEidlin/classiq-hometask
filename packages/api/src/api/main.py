@@ -11,11 +11,11 @@ from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.exceptions import HTTPException
 
-from api import health, tasks
-from api.dependencies import AppState
-from api.store import PostgresTaskStore
+from api.data.store import PostgresTaskStore
+from api.presentation import health, tasks
+from api.presentation.dependencies import AppState
+from common.data.publisher import TaskPublisher
 from common.log import configure_logging
-from common.publisher import TaskPublisher
 
 log = structlog.get_logger()
 
