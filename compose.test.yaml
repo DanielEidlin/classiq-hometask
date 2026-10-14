@@ -1,0 +1,6 @@
+# Overrides for the integration tests (tests/integration/stack.py): shorter limits, so the
+# slow cases finish quickly.
+services:
+  worker:
+    environment:
+      TASK_TIMEOUT_SECONDS: "15"

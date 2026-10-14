@@ -1,6 +1,8 @@
-"""The task message: the contract between the publishers (API, sweeper) and the Celery worker.
+"""The task queue and its message: the contract between the publishers (API, sweeper) and
+the Celery worker.
 
-The message carries only the task ID. It is built in Celery's task message format
+The queue's name and arguments are shared because every declaration must match. The
+message carries only the task ID. It is built in Celery's task message format
 (protocol v2, https://docs.celeryq.dev/en/stable/internals/protocol.html) so that a
 Celery worker consumes it natively, without the publishers depending on Celery.
 """
@@ -10,8 +12,14 @@ import uuid
 
 import aio_pika
 
+from common.settings import MAX_QUEUED_TASKS
+
 PROCESS_TASK_NAME = "worker.process"
 TASK_QUEUE = "tasks"
+TASK_QUEUE_ARGUMENTS: dict[str, object] = {
+    "x-max-length": MAX_QUEUED_TASKS,
+    "x-overflow": "reject-publish",
+}
 
 
 def encode_task_message(task_id: uuid.UUID) -> aio_pika.Message:

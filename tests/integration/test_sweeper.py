@@ -3,7 +3,8 @@ import uuid
 import httpx
 import pytest
 
-from api_client import BELL_CIRCUIT, poll_until_final
+from api_client import poll_until_final
+from circuits import BELL_CIRCUIT
 from stack import ComposeStack
 
 pytestmark = pytest.mark.integration

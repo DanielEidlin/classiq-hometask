@@ -1315,6 +1315,7 @@ name = "worker"
 version = "0.1.0"
 source = { editable = "packages/worker" }
 dependencies = [
+    { name = "billiard" },
     { name = "celery" },
     { name = "common" },
     { name = "qiskit" },
@@ -1324,6 +1325,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "billiard", specifier = ">=4.2" },
     { name = "celery", specifier = ">=5.4" },
     { name = "common", editable = "packages/common" },
     { name = "qiskit", specifier = "==2.5.2" },

@@ -35,12 +35,9 @@ A service that accepts quantum circuits over HTTP, simulates them asynchronously
 
 ### 3. Circuit validation happens in the worker
 
-**Decision.** The API performs only cheap, structural checks: the body must contain a non-empty `qc` string no larger than `MAX_CIRCUIT_BYTES` (64 KB by default). Anything else is accepted. The worker parses the circuit and fails the task with the code `INVALID_CIRCUIT` and a specific message when the circuit:
+**Decision.** The API performs only cheap, structural checks: the body must contain a non-empty `qc` string no larger than `MAX_CIRCUIT_BYTES` (64 KB by default). Anything else is accepted. The worker parses the circuit and fails the task with the code `INVALID_CIRCUIT` and the parser's message when the circuit is not valid QASM3 (syntax errors, undefined gates).
 
-- is not valid QASM3 (syntax errors, undefined gates);
-- contains no measurements.
-
-The measurement check runs before simulating, so such circuits fail fast instead of simulating and then producing no counts. Circuits too large for the worker's memory are rejected by the simulator itself (decision 12).
+Everything else is left to the simulator, and its own message is returned: a circuit with no measurements fails with Aer's "No counts for experiment", and circuits too large for the worker's memory are rejected by the simulator itself (decision 12).
 
 **Rationale.**
 
@@ -82,11 +79,11 @@ A sweeper service republishes any task still unpublished after a grace period, w
 
 | Cause | Example | Handling | Error code |
 |---|---|---|---|
-| Circuit fails validation | Invalid QASM3, no measurements | `failed`, no retry | `INVALID_CIRCUIT` |
+| Circuit fails validation | Invalid QASM3 | `failed`, no retry | `INVALID_CIRCUIT` |
 | Circuit needs more memory than the worker's budget | 27-qubit statevector on a 1.7 GB budget | `failed`, no retry; the simulator's own message is returned | `CIRCUIT_TOO_LARGE` |
-| Circuit raises during simulation | Aer error, no counts produced | `failed`, no retry | `SIMULATION_ERROR` |
+| Circuit raises during simulation | Aer error, no measurements so no counts | `failed`, no retry; the simulator's own message is returned | `SIMULATION_ERROR` |
 | Circuit exceeds time limit | Non-terminating loop | `failed`, no retry | `TIMEOUT` |
-| Simulation killed by the OS | Memory use exceeds the container limit despite the simulator's own check | `failed`, no retry | `OUT_OF_MEMORY` |
+| Simulation killed by the OS | Memory use exceeds the container limit despite the simulator's own check | `failed`, no retry | `KILLED` |
 | Database unreachable | Postgres down while saving | Retried in place, then the message is returned to the queue (decision 18) | (none; the outcome cannot be recorded) |
 | Whole worker lost | Container or host crash | Redelivered by RabbitMQ; capped at `MAX_ATTEMPTS` (default 3) | `WORKER_LOST` |
 
@@ -207,7 +204,7 @@ All values are configurable through environment variables and the Compose file.
 
 **Decision.** Three layers, all run in CI (GitHub Actions) on every push:
 
-- **Unit tests** for logic that is intricate in isolation: the Celery message encoder, failure classification, and the measurement check.
+- **Unit tests** for logic that is intricate in isolation: the Celery message encoder and failure classification.
 - **Duplicate-handling tests** against a real Postgres: the worker's task function runs twice for the same task, and the second result must be discarded.
 - **Integration tests**, black-box over HTTP against the full Compose stack, which a pytest fixture starts with `docker compose up --wait` (blocking until every health check passes). A test override file shortens limits so slow cases run quickly (a 15 s timeout, a small queue cap).
 
@@ -279,7 +276,7 @@ All values are configurable through environment variables and the Compose file.
 
 | Case | HTTP |
 |---|---|
-| Malformed body (not JSON, missing or non-string `qc`) | 400 |
+| Malformed body (not JSON, missing, non-string or empty `qc`) | 400 |
 | Unknown task ID | 404 |
 | Circuit larger than `MAX_CIRCUIT_BYTES` | 413 |
 | Queue full or broker unavailable | 503, with `Retry-After` |
