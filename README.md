@@ -90,7 +90,7 @@ A failed task's `message` explains why. Examples:
 
 | Cause | Example message |
 |---|---|
-| Not valid QASM3 | `Invalid QASM3: ...` with the parser's message |
+| Not valid QASM3 | `Invalid QASM3: ` and the importer's message, e.g. `1,23: gate 'foo' is not defined.`, or for a syntax error where the parser stopped, e.g. `syntax error at line 3, column 8, at '+'.` |
 | Too large for the worker's memory budget | Aer's message: `Insufficient memory ... Required memory: 2048M, max memory: 1700M` |
 | No measurements, or another simulator error | The error's type and message, e.g. `QiskitError: No counts for experiment ...` |
 | Ran past the time limit | `Simulation exceeded the time limit of 60 seconds.` |

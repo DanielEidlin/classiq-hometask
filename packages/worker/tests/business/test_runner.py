@@ -49,6 +49,21 @@ def test_invalid_qasm3_fails_with_the_parse_error() -> None:
     assert "'not_a_gate' is not defined" in failure.message
 
 
+def test_qasm3_syntax_error_fails_with_where_the_parser_stopped() -> None:
+    # The parser raises a syntax error with no message of its own.
+    failure = _failure("OPENQASM 3.0;\nqubit[2] q;\nh q[0] +;\n")
+
+    assert failure.code == ErrorCode.INVALID_CIRCUIT
+    assert failure.message == "Invalid QASM3: syntax error at line 3, column 8, at '+'."
+
+
+def test_qasm3_cut_short_fails_with_a_syntax_error_at_the_end() -> None:
+    failure = _failure("not qasm")
+
+    assert failure.code == ErrorCode.INVALID_CIRCUIT
+    assert failure.message == "Invalid QASM3: syntax error at line 1, column 9, at the end of the circuit."
+
+
 def test_circuit_without_measurements_fails_with_the_simulator_message() -> None:
     failure = _failure('OPENQASM 3.0;\ninclude "stdgates.inc";\nqubit[2] q;\nh q[0];\n')
 
