@@ -9,7 +9,7 @@ import tenacity
 DATABASE_UNAVAILABLE_ERRORS = (sa.exc.OperationalError, sa.exc.InterfaceError, sa.exc.TimeoutError)
 
 
-def create_db_engine(database_url: str, timeout_seconds: float) -> sa.Engine:
+def create_database_engine(database_url: str, timeout_seconds: float) -> sa.Engine:
     """An engine whose every database call fails within about `timeout_seconds` rather than hang."""
     timeout_ms = int(timeout_seconds * 1000)
     return sa.create_engine(

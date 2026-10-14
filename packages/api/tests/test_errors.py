@@ -1,20 +1,14 @@
 import uuid
-from collections.abc import AsyncIterator
 
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import AsyncConnection
 
-from api.dependencies import get_db_connection
+from api.dependencies import get_task_store
 from api.main import INTERNAL_SERVER_ERROR_MESSAGE, app
-
-
-async def _broken_db_connection() -> AsyncIterator[AsyncConnection]:
-    raise RuntimeError("the database driver blew up")
-    yield  # pragma: no cover - makes this an async generator, like the real dependency
+from fakes.api_task_store import BrokenTaskStore
 
 
 def test_unexpected_error_returns_500_in_the_error_shape(client: TestClient) -> None:
-    app.dependency_overrides[get_db_connection] = _broken_db_connection
+    app.dependency_overrides[get_task_store] = lambda: BrokenTaskStore()
 
     response = client.get(f"/tasks/{uuid.uuid4()}")
 

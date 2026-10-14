@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from api.settings import MAX_CIRCUIT_BYTES
 from api.tasks import CIRCUIT_TOO_LARGE_MESSAGE
+from fakes.api_task_store import FakeTaskStore
 
 
 def test_missing_qc_returns_400(client: TestClient) -> None:
@@ -57,7 +58,7 @@ def test_missing_body_returns_400(client: TestClient) -> None:
 
 
 def test_circuit_over_the_size_limit_returns_413_and_is_not_stored(
-    client: TestClient, db_connection: AsyncMock, publisher: AsyncMock
+    client: TestClient, task_store: FakeTaskStore, publisher: AsyncMock
 ) -> None:
     oversized_circuit = "x" * (MAX_CIRCUIT_BYTES + 1)
 
@@ -65,7 +66,7 @@ def test_circuit_over_the_size_limit_returns_413_and_is_not_stored(
 
     assert response.status_code == 413
     assert response.json() == {"status": "error", "message": CIRCUIT_TOO_LARGE_MESSAGE}
-    db_connection.execute.assert_not_awaited()
+    assert task_store.inserted == []
     publisher.publish.assert_not_awaited()
 
 

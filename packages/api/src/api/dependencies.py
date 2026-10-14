@@ -5,37 +5,27 @@ as lifespan state; Starlette gives each request a copy as `request.state`. These
 only look them up, so tests can replace them through `app.dependency_overrides`.
 """
 
-from collections.abc import AsyncIterator
 from typing import Annotated, TypedDict, cast
 
 from fastapi import Depends, Request
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
 
+from api.abstractions import TaskStore
 from common.publisher import TaskPublisher
 
 
 class AppState(TypedDict):
-    engine: AsyncEngine
+    task_store: TaskStore
     publisher: TaskPublisher
 
 
-def get_engine(request: Request) -> AsyncEngine:
-    return cast(AsyncEngine, request.state.engine)
+def get_task_store(request: Request) -> TaskStore:
+    return cast(TaskStore, request.state.task_store)
 
 
 def get_publisher(request: Request) -> TaskPublisher:
     return cast(TaskPublisher, request.state.publisher)
 
 
-async def get_db_connection(
-    engine: Annotated[AsyncEngine, Depends(get_engine)],
-) -> AsyncIterator[AsyncConnection]:
-    """A database connection for the duration of the request."""
-    async with engine.connect() as connection:
-        yield connection
-
-
-# Shorthands for declaring a dependency in a route's signature, e.g. `connection: DbConnectionDep`.
-EngineDep = Annotated[AsyncEngine, Depends(get_engine)]
+# Shorthands for declaring a dependency in a route's signature, e.g. `task_store: TaskStoreDep`.
+TaskStoreDep = Annotated[TaskStore, Depends(get_task_store)]
 PublisherDep = Annotated[TaskPublisher, Depends(get_publisher)]
-DbConnectionDep = Annotated[AsyncConnection, Depends(get_db_connection)]

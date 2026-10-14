@@ -2,7 +2,7 @@ import pytest
 import sqlalchemy as sa
 import tenacity
 
-from worker.database import create_db_engine, retry_while_unavailable
+from worker.database import create_database_engine, retry_while_unavailable
 
 FIRST_DELAY_SECONDS = 1.0
 MAX_DELAY_SECONDS = 30.0
@@ -79,7 +79,7 @@ def test_other_database_errors_are_not_retried() -> None:
 
 
 def test_database_calls_time_out_instead_of_hanging(db_engine: sa.Engine) -> None:
-    engine = create_db_engine(db_engine.url.render_as_string(hide_password=False), DB_TIMEOUT_SECONDS)
+    engine = create_database_engine(db_engine.url.render_as_string(hide_password=False), DB_TIMEOUT_SECONDS)
     try:
         with pytest.raises(sa.exc.OperationalError), engine.connect() as connection:
             connection.execute(sa.select(sa.func.pg_sleep(QUERY_SECONDS)))

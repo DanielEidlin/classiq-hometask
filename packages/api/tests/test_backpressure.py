@@ -1,12 +1,12 @@
+import uuid
 from unittest.mock import AsyncMock
 
-import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
 from api.settings import RETRY_AFTER_SECONDS
 from api.tasks import SERVICE_BUSY_MESSAGE
 from common.publisher import PublishFailed
-from common.tasks import tasks
+from fakes.api_task_store import FakeTaskStore
 
 CIRCUIT = "OPENQASM 3.0;"
 
@@ -24,25 +24,23 @@ def test_failed_publish_returns_503_with_retry_after(
 
 
 def test_failed_publish_deletes_the_inserted_task(
-    client: TestClient, db_connection: AsyncMock, publisher: AsyncMock
+    client: TestClient, task_store: FakeTaskStore, publisher: AsyncMock
 ) -> None:
     publisher.publish.side_effect = PublishFailed("rejected")
 
     client.post("/tasks", json={"qc": CIRCUIT})
 
-    statements = [call.args[0] for call in db_connection.execute.await_args_list]
-    inserted_id = statements[0].compile().params["id"]
-    deletes = [statement for statement in statements if isinstance(statement, sa.Delete)]
-    assert len(deletes) == 1
-    assert deletes[0].table is tasks
-    assert deletes[0].compile().params == {"id_1": inserted_id}
+    assert task_store.deleted == task_store.inserted
+    assert task_store.marked_published == []
 
 
-def test_successful_publish_does_not_delete_the_task(
-    client: TestClient, db_connection: AsyncMock
+def test_successful_publish_marks_the_task_published_and_keeps_it(
+    client: TestClient, task_store: FakeTaskStore
 ) -> None:
     response = client.post("/tasks", json={"qc": CIRCUIT})
 
     assert response.status_code == 202
-    statements = [call.args[0] for call in db_connection.execute.await_args_list]
-    assert not any(isinstance(statement, sa.Delete) for statement in statements)
+    task_id = uuid.UUID(response.json()["task_id"])
+    assert task_store.inserted == task_store.marked_published == [task_id]
+    assert task_store.deleted == []
+
