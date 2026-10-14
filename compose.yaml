@@ -24,6 +24,10 @@ services:
 
   rabbitmq:
     image: rabbitmq:4.1-alpine
+    # RabbitMQ keeps its data under the node's name, which comes from the hostname. Without a
+    # fixed one, a new container (after `down` and `up`, or a changed setting) gets a random
+    # name and an empty queue, losing every queued task.
+    hostname: rabbitmq
     environment:
       # How long a consumer may hold a delivered message unacknowledged before RabbitMQ closes
       # its channel and requeues the message, so a stuck worker can't hold a task forever.
