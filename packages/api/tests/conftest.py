@@ -15,7 +15,7 @@ from api.main import app
 from api.presentation.dependencies import get_publisher, get_task_store
 from common.data.publisher import TaskPublisher
 from common.data.tables import metadata
-from fakes.api_task_store import FakeTaskStore
+from tests.support.fakes.api_task_store import FakeTaskStore
 
 POSTGRES_IMAGE = "postgres:16-alpine"
 

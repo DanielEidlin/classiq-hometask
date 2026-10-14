@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from api.domain.outcomes import CompletedOutcome, FailedOutcome, PendingOutcome, TaskOutcome
 from common.domain.tasks import TaskStatus
-from fakes.api_task_store import FakeTaskStore
+from tests.support.fakes.api_task_store import FakeTaskStore
 
 COUNTS = {"00": 512, "11": 512}
 FAILURE_MESSAGE = "Simulation exceeded the time limit of 60 seconds."

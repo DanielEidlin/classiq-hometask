@@ -11,8 +11,7 @@ from structlog.testing import capture_logs
 
 from common.data.tables import tasks
 from common.domain.tasks import ErrorCode, TaskStatus
-from fakes.database_outage import DatabaseOutage
-from worker.data.database import retry_while_unavailable
+from tests.support.fakes.database_outage import DatabaseOutage
 from worker.data.store import PostgresTaskStore
 from worker.domain.abstractions import DatabaseUnavailable, StartedAttempt
 from worker.domain.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
@@ -20,9 +19,6 @@ from worker.domain.outcomes import SimulationCompleted, SimulationFailed, Simula
 CIRCUIT = "OPENQASM 3.0;"
 FIRST_COUNTS = {"00": 1024}
 SECOND_COUNTS = {"11": 1024}
-FIRST_DELAY_SECONDS = 1.0
-MAX_DELAY_SECONDS = 30.0
-GIVE_UP_SECONDS = 240.0
 # The outage tests give up after this many failed calls instead of after a delay.
 FAILED_CALLS_BEFORE_GIVING_UP = 4
 # The backoff between those four failed calls.
@@ -50,10 +46,6 @@ def _fetch_task(engine: sa.Engine, task_id: uuid.UUID) -> sa.RowMapping:
         return connection.execute(sa.select(tasks).where(tasks.c.id == task_id)).mappings().one()
 
 
-def _retrying() -> tenacity.Retrying:
-    return retry_while_unavailable(FIRST_DELAY_SECONDS, MAX_DELAY_SECONDS, GIVE_UP_SECONDS)
-
-
 @pytest.fixture
 def outage_engine(db_engine: sa.Engine) -> Iterator[sa.Engine]:
     """An engine of its own on the test database, so an outage's listener doesn't outlive the test."""
@@ -65,8 +57,8 @@ def outage_engine(db_engine: sa.Engine) -> Iterator[sa.Engine]:
 
 
 @pytest.fixture
-def store(db_engine: sa.Engine) -> PostgresTaskStore:
-    return PostgresTaskStore(db_engine, _retrying())
+def store(db_engine: sa.Engine, retrying: tenacity.Retrying) -> PostgresTaskStore:
+    return PostgresTaskStore(db_engine, retrying)
 
 
 @pytest.fixture
@@ -81,13 +73,15 @@ def sleeps() -> list[float]:
 
 
 @pytest.fixture
-def outage_store(outage_engine: sa.Engine, sleeps: list[float]) -> PostgresTaskStore:
+def outage_store(
+    outage_engine: sa.Engine, sleeps: list[float], retrying: tenacity.Retrying
+) -> PostgresTaskStore:
     """The production retry and backoff on the outage's engine, giving up after a number of
     failed calls rather than after a delay, so that sleeping can be skipped."""
-    retrying = _retrying().copy(
+    giving_up_after_failed_calls = retrying.copy(
         stop=tenacity.stop_after_attempt(FAILED_CALLS_BEFORE_GIVING_UP), sleep=sleeps.append
     )
-    return PostgresTaskStore(outage_engine, retrying)
+    return PostgresTaskStore(outage_engine, giving_up_after_failed_calls)
 
 
 def test_starting_an_attempt_counts_it_and_returns_the_circuit(

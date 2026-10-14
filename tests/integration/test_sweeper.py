@@ -5,9 +5,9 @@ import httpx
 import pytest
 import sqlalchemy as sa
 
-from api_client import poll_until_final
-from circuits import BELL_CIRCUIT
 from common.data.tables import tasks
+from tests.integration.api_client import poll_until_final
+from tests.integration.circuits import BELL_CIRCUIT
 
 pytestmark = pytest.mark.integration
 

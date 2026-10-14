@@ -10,9 +10,9 @@ import structlog
 from aio_pika.exceptions import DeliveryError
 from pamqp.commands import Basic
 
-from fakes.sweeper_task_store import FakeTaskStore
 from sweeper.business.sweeper import Sweeper
 from sweeper.domain.abstractions import StaleTask
+from tests.support.fakes.sweeper_task_store import FakeTaskStore
 
 pytestmark = pytest.mark.asyncio
 

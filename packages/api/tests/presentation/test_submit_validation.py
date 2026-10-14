@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from api.presentation.tasks import CIRCUIT_TOO_LARGE_MESSAGE
 from api.settings import MAX_CIRCUIT_BYTES
-from fakes.api_task_store import FakeTaskStore
+from tests.support.fakes.api_task_store import FakeTaskStore
 
 
 def test_missing_qc_returns_400(client: TestClient) -> None:

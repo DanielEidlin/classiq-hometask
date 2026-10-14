@@ -1,6 +1,6 @@
 import pytest
 
-from stack import ComposeStack, rabbitmqctl
+from tests.integration.stack import ComposeStack, rabbitmqctl
 
 pytestmark = pytest.mark.integration
 

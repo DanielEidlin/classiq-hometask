@@ -6,7 +6,7 @@ import httpx
 import pytest
 import sqlalchemy as sa
 
-from stack import API_PORT, DATABASE_URL, WAIT_TIMEOUT_SECONDS, ComposeStack, compose
+from tests.integration.stack import API_PORT, DATABASE_URL, WAIT_TIMEOUT_SECONDS, ComposeStack, compose
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:

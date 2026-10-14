@@ -18,7 +18,7 @@ Each package splits its code into tiers, from top to bottom:
 - `data/`: outside systems. Postgres stores and tables, the database engine, the publisher and queue encoding, the heartbeat file.
 - `domain/`: models, enums and outcomes, and the `Protocol`s in `abstractions.py`.
 
-A tier imports only from the tiers below it, so `data` implements the `domain` protocols without importing `business`. The package root is the composition root (`main.py`, `app.py`, `tasks.py`, `__main__.py`, the `health.py` probe): it builds the concrete parts and may import any tier, but no tier imports it. The exception is `settings.py` (and `common/log.py`): they only read the environment, so any tier may import them. A tier folder exists only when it has modules. Each package's tests mirror its tiers (`tests/business/test_handler.py`); tests of the root sit in `tests/`.
+A tier imports only from the tiers below it, so `data` implements the `domain` protocols without importing `business`. The package root is the composition root (`main.py`, `app.py`, `tasks.py`, `__main__.py`, the `health.py` probe): it builds the concrete parts and may import any tier, but no tier imports it. The exception is `settings.py` (and `common/log.py`): they only read the environment, so any tier may import them. A tier folder exists only when it has modules. Each package's tests mirror its tiers (`tests/business/test_handler.py`); the API's error-handling tests sit in `tests/presentation/`. Test code imports the shared helpers by their full path (`tests.support.fakes`, `tests.integration.stack`).
 
 ## Structure
 
