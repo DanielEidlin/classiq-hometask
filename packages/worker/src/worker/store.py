@@ -1,13 +1,12 @@
-"""The worker's task store on Postgres: its statements, its engine, and how its calls are
-retried while the database is unreachable.
+"""The worker's task store on Postgres.
 
-If the database is unreachable, each call is retried in place, so the worker takes no new
-tasks meanwhile. Once the outage outlasts the retry policy the call raises
-`DatabaseUnavailable`, for the message to be returned to the queue rather than acknowledged.
+Every call runs under the retry policy it is given (`worker.database.retry_while_unavailable`
+in production), so while the database is unreachable the worker retries in place and takes no
+new tasks. Once the outage outlasts the policy the call raises `DatabaseUnavailable`, for the
+message to be returned to the queue rather than acknowledged.
 """
 
 import functools
-import time
 import uuid
 from collections.abc import Callable
 from typing import assert_never, cast
@@ -15,58 +14,12 @@ from typing import assert_never, cast
 import sqlalchemy as sa
 import structlog
 import tenacity
-from pydantic import BaseModel
 
 from common.tasks import ErrorCode, TaskStatus, tasks
 from worker.abstractions import DatabaseUnavailable, StartedAttempt
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
 
 log = structlog.get_logger()
-
-# What an unreachable database surfaces as: a refused or timed-out connection or statement
-# (OperationalError), a connection that died mid-transaction (InterfaceError), and no free
-# connection in the pool in time (TimeoutError).
-DATABASE_UNAVAILABLE_ERRORS = (sa.exc.OperationalError, sa.exc.InterfaceError, sa.exc.TimeoutError)
-
-
-def create_database_engine(database_url: str, timeout_seconds: float) -> sa.Engine:
-    """An engine whose every database call fails within about `timeout_seconds` rather than hang."""
-    timeout_ms = int(timeout_seconds * 1000)
-    return sa.create_engine(
-        database_url,
-        pool_pre_ping=True,
-        pool_timeout=timeout_seconds,
-        connect_args={
-            # libpq takes whole seconds, and treats 0 as no timeout.
-            "connect_timeout": max(1, round(timeout_seconds)),
-            # statement_timeout bounds a slow query; tcp_user_timeout bounds a peer that
-            # stopped answering mid-query, which the server-side timeout can't see.
-            "options": f"-c statement_timeout={timeout_ms}",
-            "tcp_user_timeout": timeout_ms,
-        },
-    )
-
-
-class DatabaseRetryPolicy(BaseModel, frozen=True):
-    """How long to keep retrying a call while the database is unreachable: waiting
-    `first_delay_seconds`, doubling up to `max_delay_seconds`, and giving up rather than
-    sleep past `give_up_seconds`."""
-
-    first_delay_seconds: float
-    max_delay_seconds: float
-    give_up_seconds: float
-
-
-def _retrying(policy: DatabaseRetryPolicy, sleep: Callable[[float], None]) -> tenacity.Retrying:
-    return tenacity.Retrying(
-        retry=tenacity.retry_if_exception_type(DATABASE_UNAVAILABLE_ERRORS),
-        wait=tenacity.wait_exponential(
-            multiplier=policy.first_delay_seconds, max=policy.max_delay_seconds
-        ),
-        stop=tenacity.stop_before_delay(policy.give_up_seconds),
-        sleep=sleep,
-    )
-
 
 def _start_attempt(connection: sa.Connection, task_id: uuid.UUID) -> StartedAttempt | None:
     statement = (
@@ -128,15 +81,9 @@ def _log_failed_call(
 
 
 class PostgresTaskStore:
-    def __init__(
-        self,
-        engine: sa.Engine,
-        retry_policy: DatabaseRetryPolicy,
-        sleep: Callable[[float], None] = time.sleep,
-    ) -> None:
-        """`sleep` waits between retries; tests pass one that doesn't."""
+    def __init__(self, engine: sa.Engine, retrying: tenacity.Retrying) -> None:
         self._engine = engine
-        self._retrying = _retrying(retry_policy, sleep)
+        self._retrying = retrying
 
     def start_attempt(self, task_id: uuid.UUID) -> StartedAttempt | None:
         return self._with_retries(task_id, functools.partial(_start_attempt, task_id=task_id))
