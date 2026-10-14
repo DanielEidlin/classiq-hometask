@@ -15,7 +15,7 @@ import tenacity
 from structlog.testing import capture_logs
 
 from common.tasks import ErrorCode, TaskStatus, tasks
-from fakes.circuit_runners import RedeliveredDuringSimulation, RunnerThatTakesTheDatabaseDown
+from fakes.circuit_runners import RunnerThatTakesTheDatabaseDown, RunnerThatTriggersARedelivery
 from fakes.database_outage import DatabaseOutage
 from worker.abstractions import CircuitRunner
 from worker.database import retry_while_unavailable
@@ -100,7 +100,7 @@ def test_running_a_task_twice_keeps_the_first_result(db_engine: sa.Engine) -> No
     redelivery = _handler(db_engine, _runner(SimulationCompleted(counts=FIRST_COUNTS)))
     handler = _handler(
         db_engine,
-        RedeliveredDuringSimulation(redelivery, task_id, SimulationCompleted(counts=SECOND_COUNTS)),
+        RunnerThatTriggersARedelivery(redelivery, task_id, SimulationCompleted(counts=SECOND_COUNTS)),
     )
 
     with capture_logs() as logs:

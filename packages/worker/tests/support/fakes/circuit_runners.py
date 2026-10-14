@@ -19,8 +19,8 @@ class RunnerThatTakesTheDatabaseDown:
         return self._outcome
 
 
-class RedeliveredDuringSimulation:
-    """A circuit run during which a redelivery of the same task runs to completion first,
+class RunnerThatTriggersARedelivery:
+    """Triggers a redelivery of the same task, which completes before this run returns,
     as when a worker is presumed lost but is still simulating."""
 
     def __init__(self, redelivery: TaskHandler, task_id: uuid.UUID, outcome: SimulationOutcome) -> None:
