@@ -131,7 +131,31 @@ def test_final_task_is_skipped(db_engine: sa.Engine) -> None:
     before = _fetch_task(db_engine, task_id)
     simulation = _simulation(SimulationCompleted(counts=SECOND_COUNTS))
 
-    TaskHandler(db_engine, simulation, MAX_ATTEMPTS).handle(task_id)
+    with capture_logs() as logs:
+        TaskHandler(db_engine, simulation, MAX_ATTEMPTS).handle(task_id)
 
     simulation.assert_not_called()
     assert _fetch_task(db_engine, task_id) == before
+    assert {
+        "event": "task_skipped",
+        "task_id": str(task_id),
+        "reason": "already final",
+        "status": TaskStatus.COMPLETED,
+        "log_level": "info",
+    } in logs
+
+
+def test_missing_task_is_skipped(db_engine: sa.Engine) -> None:
+    task_id = uuid.uuid4()
+    simulation = _simulation(SimulationCompleted(counts=FIRST_COUNTS))
+
+    with capture_logs() as logs:
+        TaskHandler(db_engine, simulation, MAX_ATTEMPTS).handle(task_id)
+
+    simulation.assert_not_called()
+    assert {
+        "event": "task_skipped",
+        "task_id": str(task_id),
+        "reason": "not found",
+        "log_level": "info",
+    } in logs

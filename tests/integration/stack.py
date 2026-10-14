@@ -11,6 +11,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_NAME = "classiq-hometask-test"
 # Shortens limits so slow cases (a timeout) run quickly.
 TEST_OVERRIDE_FILE = "compose.test.yaml"
+# The worker's time limit as compose.test.yaml sets it.
+TASK_TIMEOUT_SECONDS = 15
 API_PORT = os.environ.get("TEST_API_PORT", "18000")
 POSTGRES_PORT = os.environ.get("TEST_POSTGRES_PORT", "15432")
 # The credentials compose.yaml gives Postgres, through the port compose.test.yaml publishes.

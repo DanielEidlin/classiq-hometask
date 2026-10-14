@@ -50,6 +50,13 @@ def _claim(connection: sa.Connection, task_id: uuid.UUID) -> ClaimedTask | None:
     return None if row is None else ClaimedTask.model_validate(row._mapping)
 
 
+def _fetch_status(connection: sa.Connection, task_id: uuid.UUID) -> TaskStatus | None:
+    """The task's status, or None when it doesn't exist."""
+    query = sa.select(tasks.c.status).where(tasks.c.id == task_id)
+    status: TaskStatus | None = connection.execute(query).scalar_one_or_none()
+    return status
+
+
 def _complete(connection: sa.Connection, task_id: uuid.UUID, counts: dict[str, int]) -> bool:
     """Record the counts, if the task is still pending; the first attempt to finish wins.
 
@@ -127,7 +134,13 @@ class TaskHandler:
         with self._engine.begin() as connection:
             claimed = _claim(connection, task_id)
         if claimed is None:
-            task_log.info("task_skipped", reason="not pending")
+            # A separate read: the conditional claim can't tell a final task from a missing one.
+            with self._engine.connect() as connection:
+                status = _fetch_status(connection, task_id)
+            if status is None:
+                task_log.info("task_skipped", reason="not found")
+            else:
+                task_log.info("task_skipped", reason="already final", status=status)
             return
         task_log.info("task_started", attempt=claimed.attempts)
 
