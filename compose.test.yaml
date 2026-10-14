@@ -1,6 +1,10 @@
 # Overrides for the integration tests (tests/integration/stack.py): shorter limits, so the
-# slow cases finish quickly.
+# slow cases finish quickly, and Postgres published so tests can inspect and arrange task rows.
 services:
+  postgres:
+    ports:
+      - "${POSTGRES_PORT:-15432}:5432"
+
   worker:
     environment:
       TASK_TIMEOUT_SECONDS: "15"

@@ -11,9 +11,16 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_NAME = "classiq-hometask-test"
 # Shortens limits so slow cases (a timeout) run quickly.
 TEST_OVERRIDE_FILE = "compose.test.yaml"
+# The worker's time limit as compose.test.yaml sets it.
+TASK_TIMEOUT_SECONDS = 15
 API_PORT = os.environ.get("TEST_API_PORT", "18000")
+POSTGRES_PORT = os.environ.get("TEST_POSTGRES_PORT", "15432")
+# The credentials compose.yaml gives Postgres, through the port compose.test.yaml publishes.
+DATABASE_URL = f"postgresql+psycopg://tasks:tasks@localhost:{POSTGRES_PORT}/tasks"
 WAIT_TIMEOUT_SECONDS = "300"
 TASK_QUEUE_CAP_POLICY = "test-task-queue-cap"
+
+_COMPOSE_ENVIRONMENT = {**os.environ, "API_PORT": API_PORT, "POSTGRES_PORT": POSTGRES_PORT}
 
 
 def compose(*args: str) -> None:
@@ -24,7 +31,7 @@ def compose(*args: str) -> None:
             *args,
         ],
         cwd=REPO_ROOT,
-        env={**os.environ, "API_PORT": API_PORT},
+        env=_COMPOSE_ENVIRONMENT,
         check=True,
     )
 
@@ -33,7 +40,7 @@ def rabbitmqctl(*args: str) -> str:
     result = subprocess.run(
         ["docker", "compose", "--project-name", PROJECT_NAME, "exec", "-T", "rabbitmq", "rabbitmqctl", *args],
         cwd=REPO_ROOT,
-        env={**os.environ, "API_PORT": API_PORT},
+        env=_COMPOSE_ENVIRONMENT,
         check=True,
         capture_output=True,
         text=True,
@@ -50,13 +57,9 @@ class ComposeStack:
     def start(self, service: str) -> None:
         compose("start", service)
 
-    def execute_sql(self, statement: str) -> None:
-        # Postgres publishes no port to the host, so the statement runs through `psql` in its container.
-        compose(
-            "exec", "-T", "postgres",
-            "psql", "--username", "tasks", "--dbname", "tasks", "-v", "ON_ERROR_STOP=1",
-            "--command", statement,
-        )
+    def kill(self, service: str) -> None:
+        """Kill every replica of the service with SIGKILL, as a crash would, with no graceful shutdown."""
+        compose("kill", service)
 
     def restart(self, service: str) -> None:
         # `restart` returns once the container is running, not once it is healthy.

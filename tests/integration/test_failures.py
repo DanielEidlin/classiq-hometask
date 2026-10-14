@@ -2,11 +2,10 @@ import httpx
 import pytest
 
 from api_client import poll_until_final, submit_task
+from circuits import NON_TERMINATING_CIRCUIT
+from stack import TASK_TIMEOUT_SECONDS
 
 pytestmark = pytest.mark.integration
-
-# compose.test.yaml shortens the worker's time limit to this.
-TASK_TIMEOUT_SECONDS = 15
 
 
 def test_invalid_circuit_reports_error_with_the_parse_error(api: httpx.Client) -> None:
@@ -22,12 +21,7 @@ def test_invalid_circuit_reports_error_with_the_parse_error(api: httpx.Client) -
 
 
 def test_non_terminating_circuit_reports_a_timeout(api: httpx.Client) -> None:
-    # The qubit is flipped to 1 and never changes, so the loop never ends.
-    task_id = submit_task(
-        api,
-        'OPENQASM 3.0; include "stdgates.inc"; qubit[1] q; bit[1] c; '
-        "x q[0]; c[0] = measure q[0]; while (c[0]) { c[0] = measure q[0]; }",
-    )
+    task_id = submit_task(api, NON_TERMINATING_CIRCUIT)
 
     final = poll_until_final(api, task_id)
 
