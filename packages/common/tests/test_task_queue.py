@@ -1,7 +1,7 @@
 import json
 import uuid
 
-from common.message import PROCESS_TASK_NAME, encode_task_message
+from common.task_queue import PROCESS_TASK_NAME, encode_task_message
 
 
 def test_encodes_celery_protocol_v2_message() -> None:

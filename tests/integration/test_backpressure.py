@@ -13,8 +13,8 @@ def test_submissions_beyond_the_queue_cap_get_503_and_accepted_tasks_complete(
     api: httpx.Client, compose_stack: ComposeStack
 ) -> None:
     # With no worker consuming, every accepted task stays in the queue.
-    compose_stack.stop("worker")
     try:
+        compose_stack.stop("worker")
         compose_stack.purge_task_queue()
         responses = [
             api.post("/tasks", json={"qc": BELL_CIRCUIT})

@@ -4,13 +4,13 @@ import os
 import subprocess
 from pathlib import Path
 
+from common.task_queue import TASK_QUEUE
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECT_NAME = "classiq-hometask-test"
 API_PORT = os.environ.get("TEST_API_PORT", "18000")
 # A small queue cap, so the backpressure test can fill the queue quickly.
 MAX_QUEUED_TASKS = 5
-# The task queue's name, `TASK_QUEUE` in common/message.py.
-TASK_QUEUE = "tasks"
 
 
 def compose(*args: str) -> None:

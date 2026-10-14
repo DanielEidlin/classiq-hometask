@@ -6,7 +6,7 @@ from celery import Celery
 from kombu import Queue
 
 from common.log import configure_logging
-from common.message import TASK_QUEUE, TASK_QUEUE_ARGUMENTS
+from common.task_queue import TASK_QUEUE, TASK_QUEUE_ARGUMENTS
 
 configure_logging("worker")
 

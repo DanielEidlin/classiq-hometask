@@ -8,7 +8,7 @@ import sqlalchemy as sa
 import structlog
 from pydantic import BaseModel
 
-from common.message import PROCESS_TASK_NAME
+from common.task_queue import PROCESS_TASK_NAME
 from common.tasks import TaskStatus, tasks
 from worker import simulation
 from worker.app import app

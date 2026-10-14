@@ -8,7 +8,7 @@ import aio_pika
 import aio_pika.abc
 import aio_pika.exceptions
 
-from common.message import TASK_QUEUE, TASK_QUEUE_ARGUMENTS, encode_task_message
+from common.task_queue import TASK_QUEUE, TASK_QUEUE_ARGUMENTS, encode_task_message
 from common.settings import PUBLISH_TIMEOUT_SECONDS
 
 
@@ -67,4 +67,4 @@ class TaskPublisher:
             ConnectionError,
             TimeoutError,
         ) as error:
-            raise PublishFailed(f"task {task_id} was not confirmed: {error!r}") from error
+            raise PublishFailed(f"task {task_id} was not confirmed: {repr(error)}") from error
