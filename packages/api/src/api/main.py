@@ -18,6 +18,8 @@ from common.publisher import TaskPublisher
 
 log = structlog.get_logger()
 
+INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error."
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[AppState]:
@@ -75,5 +77,5 @@ async def render_unexpected_error(
     except Exception:
         log.exception("request_crashed", method=request.method, path=request.url.path)
         return JSONResponse(
-            status_code=500, content={"status": "error", "message": "Internal server error."}
+            status_code=500, content={"status": "error", "message": INTERNAL_SERVER_ERROR_MESSAGE}
         )

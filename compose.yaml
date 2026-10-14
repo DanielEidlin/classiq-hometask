@@ -2,6 +2,10 @@ x-app-environment: &app-environment
   DATABASE_URL: postgresql+psycopg://tasks:tasks@postgres:5432/tasks
   RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
   LOG_FORMAT: ${LOG_FORMAT:-json}
+  # Every service that declares the task queue must use the same cap (RabbitMQ refuses a
+  # redeclaration with different arguments), so it is set once here.
+  MAX_QUEUED_TASKS: ${MAX_QUEUED_TASKS:-10000}
+  PUBLISH_TIMEOUT_SECONDS: ${PUBLISH_TIMEOUT_SECONDS:-5}
 
 services:
   postgres:
@@ -45,6 +49,7 @@ services:
     environment:
       <<: *app-environment
       MAX_CIRCUIT_BYTES: ${MAX_CIRCUIT_BYTES:-65536}
+      RETRY_AFTER_SECONDS: ${RETRY_AFTER_SECONDS:-5}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:

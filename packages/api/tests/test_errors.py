@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from api.dependencies import get_db_connection
-from api.main import app
+from api.main import INTERNAL_SERVER_ERROR_MESSAGE, app
 
 
 async def _broken_db_connection() -> AsyncIterator[AsyncConnection]:
@@ -19,4 +19,4 @@ def test_unexpected_error_returns_500_in_the_error_shape(client: TestClient) -> 
     response = client.get(f"/tasks/{uuid.uuid4()}")
 
     assert response.status_code == 500
-    assert response.json() == {"status": "error", "message": "Internal server error."}
+    assert response.json() == {"status": "error", "message": INTERNAL_SERVER_ERROR_MESSAGE}
