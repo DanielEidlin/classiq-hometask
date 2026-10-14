@@ -15,8 +15,11 @@ import tenacity
 from structlog.testing import capture_logs
 
 from common.tasks import ErrorCode, TaskStatus, tasks
+from fakes.circuit_runners import RedeliveredDuringSimulation, RunnerThatTakesTheDatabaseDown
+from fakes.database_outage import DatabaseOutage
+from worker.abstractions import CircuitRunner
 from worker.database import retry_while_unavailable
-from worker.handler import WORKER_LOST_MESSAGE, CircuitRunner, DatabaseUnavailable, TaskHandler
+from worker.handler import WORKER_LOST_MESSAGE, DatabaseUnavailable, TaskHandler
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
 
 MAX_ATTEMPTS = 3
@@ -82,35 +85,6 @@ def _handler(
     return TaskHandler(engine, circuit_runner, MAX_ATTEMPTS, retrying or _retrying())
 
 
-class _DatabaseOutage:
-    """Fails every statement on an engine while down, as an unreachable database would."""
-
-    def __init__(self, engine: sa.Engine) -> None:
-        self.down = False
-        self.recover_after_failures: int | None = None
-        self._failures = 0
-        sa.event.listen(engine, "before_cursor_execute", self._fail_while_down)
-
-    def _fail_while_down(self, *args: object) -> None:
-        if not self.down:
-            return
-        self._failures += 1
-        if self._failures == self.recover_after_failures:
-            self.down = False
-        raise sa.exc.OperationalError("", {}, ConnectionRefusedError("connection refused"))
-
-
-class _RunnerThatTakesTheDatabaseDown:
-    """Starts the outage while the circuit runs, so the claim succeeds and the recording fails."""
-
-    def __init__(self, outage: _DatabaseOutage) -> None:
-        self._outage = outage
-
-    def run(self, circuit: str) -> SimulationOutcome:
-        self._outage.down = True
-        return SimulationCompleted(counts=FIRST_COUNTS)
-
-
 @pytest.fixture
 def outage_engine(db_engine: sa.Engine) -> Iterator[sa.Engine]:
     """An engine of its own on the test database, so an outage's listener doesn't outlive the test."""
@@ -121,23 +95,13 @@ def outage_engine(db_engine: sa.Engine) -> Iterator[sa.Engine]:
         engine.dispose()
 
 
-class _RedeliveredDuringSimulation:
-    """A circuit run during which a redelivery of the same task runs to completion first,
-    as when a worker is presumed lost but is still simulating."""
-
-    def __init__(self, redelivery: TaskHandler, task_id: uuid.UUID) -> None:
-        self._redelivery = redelivery
-        self._task_id = task_id
-
-    def run(self, circuit: str) -> SimulationOutcome:
-        self._redelivery.handle(self._task_id)
-        return SimulationCompleted(counts=SECOND_COUNTS)
-
-
 def test_running_a_task_twice_keeps_the_first_result(db_engine: sa.Engine) -> None:
     task_id = _insert_task(db_engine)
     redelivery = _handler(db_engine, _runner(SimulationCompleted(counts=FIRST_COUNTS)))
-    handler = _handler(db_engine, _RedeliveredDuringSimulation(redelivery, task_id))
+    handler = _handler(
+        db_engine,
+        RedeliveredDuringSimulation(redelivery, task_id, SimulationCompleted(counts=SECOND_COUNTS)),
+    )
 
     with capture_logs() as logs:
         handler.handle(task_id)
@@ -231,9 +195,9 @@ def test_outcome_is_given_up_on_for_requeue_while_the_database_stays_unreachable
     outage_engine: sa.Engine,
 ) -> None:
     task_id = _insert_task(outage_engine)
-    outage = _DatabaseOutage(outage_engine)
+    outage = DatabaseOutage(outage_engine)
     sleeps: list[float] = []
-    handler = _handler(outage_engine, _RunnerThatTakesTheDatabaseDown(outage), _retrying(sleeps.append))
+    handler = _handler(outage_engine, RunnerThatTakesTheDatabaseDown(outage, SimulationCompleted(counts=FIRST_COUNTS)), _retrying(sleeps.append))
 
     with capture_logs() as logs, pytest.raises(DatabaseUnavailable):
         handler.handle(task_id)
@@ -252,10 +216,10 @@ def test_outcome_is_recorded_once_the_database_recovers_during_the_retries(
     outage_engine: sa.Engine,
 ) -> None:
     task_id = _insert_task(outage_engine)
-    outage = _DatabaseOutage(outage_engine)
+    outage = DatabaseOutage(outage_engine)
     outage.recover_after_failures = FAILED_CALLS_BEFORE_RECOVERY
 
-    _handler(outage_engine, _RunnerThatTakesTheDatabaseDown(outage)).handle(task_id)
+    _handler(outage_engine, RunnerThatTakesTheDatabaseDown(outage, SimulationCompleted(counts=FIRST_COUNTS))).handle(task_id)
 
     task = _fetch_task(outage_engine, task_id)
     assert task["status"] == TaskStatus.COMPLETED
@@ -266,7 +230,7 @@ def test_task_arriving_while_the_database_is_unreachable_is_given_up_on_without_
     outage_engine: sa.Engine,
 ) -> None:
     task_id = _insert_task(outage_engine)
-    outage = _DatabaseOutage(outage_engine)
+    outage = DatabaseOutage(outage_engine)
     circuit_runner = _runner(SimulationCompleted(counts=FIRST_COUNTS))
     outage.down = True
 

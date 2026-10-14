@@ -16,7 +16,7 @@ policy MAX_ATTEMPTS times in a row fails the task as WORKER_LOST.
 import functools
 import uuid
 from collections.abc import Callable
-from typing import Protocol, Self, assert_never, cast
+from typing import assert_never, cast
 
 import sqlalchemy as sa
 import structlog
@@ -24,27 +24,14 @@ import tenacity
 from pydantic import BaseModel
 
 from common.tasks import ErrorCode, TaskStatus, tasks
-from worker.database import create_db_engine, retry_while_unavailable
+from worker.abstractions import CircuitRunner
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
-from worker.runner import SimulationRunner
-from worker.settings import (
-    DB_OUTAGE_GIVE_UP_SECONDS,
-    DB_RETRY_FIRST_DELAY_SECONDS,
-    DB_RETRY_MAX_DELAY_SECONDS,
-    DB_TIMEOUT_SECONDS,
-    MAX_ATTEMPTS,
-    SIMULATION_LIMITS,
-)
 
 log = structlog.get_logger()
 
 WORKER_LOST_MESSAGE = (
     "The worker running the task was lost {max_attempts} times, so it was not run again."
 )
-
-
-class CircuitRunner(Protocol):
-    def run(self, circuit: str) -> SimulationOutcome: ...
 
 
 class DatabaseUnavailable(Exception):
@@ -157,17 +144,6 @@ class TaskHandler:
         self._circuit_runner = circuit_runner
         self._max_attempts = max_attempts
         self._retrying = retrying
-
-    @classmethod
-    def connect(cls, database_url: str) -> Self:
-        return cls(
-            create_db_engine(database_url, DB_TIMEOUT_SECONDS),
-            SimulationRunner(SIMULATION_LIMITS),
-            MAX_ATTEMPTS,
-            retry_while_unavailable(
-                DB_RETRY_FIRST_DELAY_SECONDS, DB_RETRY_MAX_DELAY_SECONDS, DB_OUTAGE_GIVE_UP_SECONDS
-            ),
-        )
 
     def _in_transaction[T](self, operation: Callable[[sa.Connection], T]) -> T:
         with self._engine.begin() as connection:
