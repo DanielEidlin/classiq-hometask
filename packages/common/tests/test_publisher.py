@@ -16,9 +16,9 @@ PUBLISH_TIMEOUT_SECONDS = 0.05
 NEVER_CONFIRMED_SECONDS = PUBLISH_TIMEOUT_SECONDS * 100
 
 
-def _publisher_with_publish(publish: AsyncMock) -> TaskPublisher:
+def _task_publisher_with_exchange_publish(exchange_publish: AsyncMock) -> TaskPublisher:
     channel = MagicMock()
-    channel.default_exchange.publish = publish
+    channel.default_exchange.publish = exchange_publish
     return TaskPublisher(
         cast(aio_pika.abc.AbstractRobustConnection, MagicMock()),
         cast(aio_pika.abc.AbstractChannel, channel),
@@ -39,23 +39,23 @@ async def _never_confirmed(*args: object, **kwargs: object) -> None:
     ],
 )
 def test_publish_failure_raises_publish_failed(failure: Exception) -> None:
-    publisher = _publisher_with_publish(AsyncMock(side_effect=failure))
+    publisher = _task_publisher_with_exchange_publish(AsyncMock(side_effect=failure))
 
     with pytest.raises(PublishFailed):
         asyncio.run(publisher.publish(uuid.uuid4()))
 
 
 def test_unconfirmed_publish_times_out_as_publish_failed() -> None:
-    publisher = _publisher_with_publish(AsyncMock(side_effect=_never_confirmed))
+    publisher = _task_publisher_with_exchange_publish(AsyncMock(side_effect=_never_confirmed))
 
     with pytest.raises(PublishFailed):
         asyncio.run(publisher.publish(uuid.uuid4()))
 
 
 def test_confirmed_publish_returns() -> None:
-    publish = AsyncMock()
-    publisher = _publisher_with_publish(publish)
+    exchange_publish = AsyncMock()
+    publisher = _task_publisher_with_exchange_publish(exchange_publish)
 
     asyncio.run(publisher.publish(uuid.uuid4()))
 
-    publish.assert_awaited_once()
+    exchange_publish.assert_awaited_once()

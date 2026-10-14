@@ -1,6 +1,5 @@
 """Routes for submitting tasks and reading their outcomes."""
 
-import os
 import uuid
 from typing import Annotated, Literal, assert_never
 
@@ -11,6 +10,7 @@ from pydantic import BaseModel, Field, TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncConnection
 
 from api.dependencies import DbConnectionDep, PublisherDep
+from api.settings import MAX_CIRCUIT_BYTES, RETRY_AFTER_SECONDS
 from common.publisher import PublishFailed
 from common.tasks import TaskStatus, tasks
 
@@ -18,8 +18,7 @@ log = structlog.get_logger()
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
-MAX_CIRCUIT_BYTES = int(os.environ.get("MAX_CIRCUIT_BYTES", "65536"))
-RETRY_AFTER_SECONDS = int(os.environ.get("RETRY_AFTER_SECONDS", "5"))
+SERVICE_BUSY_MESSAGE = "The service is busy. Submit the task again later."
 
 
 class SubmitTaskRequest(BaseModel):
@@ -101,13 +100,11 @@ async def submit_task(
     try:
         await publisher.publish(task_id)
     except PublishFailed:
-        # Not accepted, so the row must go: otherwise the sweeper would later publish a
-        # task whose ID the client never received.
         log.warning("task_shed", task_id=str(task_id), exc_info=True)
         await _delete_task(connection, task_id)
         raise HTTPException(
             503,
-            "The service is busy. Submit the task again later.",
+            SERVICE_BUSY_MESSAGE,
             headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
         ) from None
     async with connection.begin():

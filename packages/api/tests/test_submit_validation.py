@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from api.tasks import MAX_CIRCUIT_BYTES
+from api.settings import MAX_CIRCUIT_BYTES
 
 
 def test_missing_qc_returns_400(client: TestClient) -> None:

@@ -3,7 +3,8 @@ from unittest.mock import AsyncMock
 import sqlalchemy as sa
 from fastapi.testclient import TestClient
 
-from api.tasks import RETRY_AFTER_SECONDS
+from api.settings import RETRY_AFTER_SECONDS
+from api.tasks import SERVICE_BUSY_MESSAGE
 from common.publisher import PublishFailed
 from common.tasks import tasks
 
@@ -19,10 +20,7 @@ def test_failed_publish_returns_503_with_retry_after(
 
     assert response.status_code == 503
     assert response.headers["retry-after"] == str(RETRY_AFTER_SECONDS)
-    assert response.json() == {
-        "status": "error",
-        "message": "The service is busy. Submit the task again later.",
-    }
+    assert response.json() == {"status": "error", "message": SERVICE_BUSY_MESSAGE}
 
 
 def test_failed_publish_deletes_the_inserted_task(

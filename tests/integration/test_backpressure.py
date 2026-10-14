@@ -15,6 +15,7 @@ def test_submissions_beyond_the_queue_cap_get_503_and_accepted_tasks_complete(
     # With no worker consuming, every accepted task stays in the queue.
     compose_stack.stop("worker")
     try:
+        compose_stack.purge_task_queue()
         responses = [
             api.post("/tasks", json={"qc": BELL_CIRCUIT})
             for _ in range(MAX_QUEUED_TASKS + SUBMISSIONS_OVER_THE_CAP)
@@ -24,9 +25,8 @@ def test_submissions_beyond_the_queue_cap_get_503_and_accepted_tasks_complete(
 
     accepted = [response for response in responses if response.status_code == 202]
     rejected = [response for response in responses if response.status_code != 202]
-    # At most the cap: tasks left in the queue by earlier tests would take some of the room.
-    assert 0 < len(accepted) <= MAX_QUEUED_TASKS
-    assert len(rejected) >= SUBMISSIONS_OVER_THE_CAP
+    assert len(accepted) == MAX_QUEUED_TASKS
+    assert len(rejected) == SUBMISSIONS_OVER_THE_CAP
     for response in rejected:
         assert response.status_code == 503
         assert int(response.headers["retry-after"]) > 0

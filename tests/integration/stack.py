@@ -9,6 +9,8 @@ PROJECT_NAME = "classiq-hometask-test"
 API_PORT = os.environ.get("TEST_API_PORT", "18000")
 # A small queue cap, so the backpressure test can fill the queue quickly.
 MAX_QUEUED_TASKS = 5
+# The task queue's name, `TASK_QUEUE` in common/message.py.
+TASK_QUEUE = "tasks"
 
 
 def compose(*args: str) -> None:
@@ -28,3 +30,6 @@ class ComposeStack:
 
     def start(self, service: str) -> None:
         compose("start", service)
+
+    def purge_task_queue(self) -> None:
+        compose("exec", "rabbitmq", "rabbitmqctl", "purge_queue", TASK_QUEUE)
