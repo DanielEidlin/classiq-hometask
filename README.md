@@ -181,9 +181,10 @@ A `uv` workspace with one package per service (decision 8):
 |---|---|
 | `packages/common` | The contracts shared by every service: the `tasks` table, status and error-code enums, the task message and queue, the publisher, logging setup, and the Alembic migrations |
 | `packages/api` | The FastAPI service |
-| `packages/worker` | The Celery worker: task handler, supervised simulation runner, database retries |
+| `packages/worker` | The Celery worker: task handler, supervised simulation runner, and the task store with its retries while the database is unreachable |
 | `packages/sweeper` | The sweeper loop and its health check |
 | `tests/integration` | Black-box tests against the full Compose stack |
+| `tests/support/fakes` | In-memory test doubles for each service's task store, and a simulated database outage |
 
 ## Configuration
 
@@ -451,8 +452,8 @@ All values are configurable through environment variables and the Compose file.
 
 **Decision.** Three layers, all run in CI (GitHub Actions) on every push:
 
-- **Unit tests** for logic that is intricate in isolation: the Celery message encoder, the publisher's failure handling, request validation and load shedding (with the database and broker mocked), failure classification, the database retry policy, and the sweeper's loop and health check. The simulation runner's tests simulate real circuits with Aer, covering counts, invalid QASM3, no measurements, too large for the memory budget, a timeout and an unexpected simulator error.
-- **Tests against a real Postgres**, in a throwaway container started by testcontainers. The worker's task handler: a task run twice keeps the first result, the attempt cap, and retrying and giving up while the database is unreachable. The sweeper: the grace period, two sweepers at once publishing each task once, a rejected publish, and stale-task warnings.
+- **Unit tests** for logic that is intricate in isolation: the Celery message encoder, the publisher's failure handling, failure classification, the database retry policy, and the sweeper's loop and health check. The API's routes, the worker's task handler and the sweeper's pass run against in-memory fakes of their task stores: request validation and load shedding, skipping a final or missing task, the attempt cap, stopping before simulating when the database is unreachable, and skipping a rejected publish. The simulation runner's tests simulate real circuits with Aer, covering counts, invalid QASM3, no measurements, too large for the memory budget, a timeout and an unexpected simulator error.
+- **Task-store tests against a real Postgres**, in a throwaway container started by testcontainers: each service's statements, behind the interface the rest of its code uses. The worker's store keeps the first of two recorded outcomes, counts attempts, and retries and then gives up while the database is unreachable. The sweeper's store skips tasks another batch holds and finds stale tasks. The API's store reads each stored outcome back in its response shape.
 - **Integration tests**, black-box over HTTP against the full Compose stack, which a pytest fixture starts with `docker compose up --wait` (blocking until every health check passes). A test override file shortens the worker's time limit to 15 s, so the slow cases run quickly, and publishes Postgres's port, so tests can inspect and arrange task rows. The queue-full test lowers the queue cap with a temporary RabbitMQ policy.
 
 | Group | Tests |
@@ -469,7 +470,7 @@ All values are configurable through environment variables and the Compose file.
 - **The broker-restart test asserts completion rather than sampling queue depth.** Published tasks have no recovery path other than their RabbitMQ message (the sweeper only republishes unpublished tasks), so if the restart lost them they would stay `pending` and the test would fail. Completion proves the messages survived and remained consumable. The test documents this assumption, since a future mechanism that republishes stale tasks would mask message loss.
 - **Isolation.** Resilience tests are marked and run after the core tests, and each restores the stack in a `finally` block, so one failure cannot cascade.
 - **Tests run from the host.** Killing and restarting containers needs the Docker CLI, which a containerised test runner could only reach by mounting the Docker socket.
-- **Duplicate handling is tested below the HTTP layer** because arranging an overlapping redelivery end to end would depend on timing; calling the task handler directly is deterministic.
+- **Duplicate handling is tested at the task store** because arranging an overlapping redelivery end to end would depend on timing; recording two outcomes through the store directly is deterministic.
 
 ### 14. The sweeper is a dedicated service
 
