@@ -11,25 +11,15 @@ from worker.app import app
 from worker.abstractions import DatabaseUnavailable
 from worker.handler import TaskHandler
 from worker.runner import SimulationRunner
-from worker.settings import (
-    DB_OUTAGE_GIVE_UP_SECONDS,
-    DB_RETRY_FIRST_DELAY_SECONDS,
-    DB_RETRY_MAX_DELAY_SECONDS,
-    DB_TIMEOUT_SECONDS,
-    MAX_ATTEMPTS,
-    SIMULATION_LIMITS,
-)
-from worker.store import PostgresTaskStore, create_database_engine, retry_while_unavailable
+from worker.settings import DB_RETRY_POLICY, DB_TIMEOUT_SECONDS, MAX_ATTEMPTS, SIMULATION_LIMITS
+from worker.store import PostgresTaskStore, create_database_engine
 
 
 # Built on first use: the engine's connection pool must not cross Celery's fork into its pool processes.
 @functools.cache
 def _handler() -> TaskHandler:
     store = PostgresTaskStore(
-        create_database_engine(os.environ["DATABASE_URL"], DB_TIMEOUT_SECONDS),
-        retry_while_unavailable(
-            DB_RETRY_FIRST_DELAY_SECONDS, DB_RETRY_MAX_DELAY_SECONDS, DB_OUTAGE_GIVE_UP_SECONDS
-        ),
+        create_database_engine(os.environ["DATABASE_URL"], DB_TIMEOUT_SECONDS), DB_RETRY_POLICY
     )
     return TaskHandler(store, SimulationRunner(SIMULATION_LIMITS), MAX_ATTEMPTS)
 

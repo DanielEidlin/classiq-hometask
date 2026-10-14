@@ -12,28 +12,10 @@ from common.tasks import TaskStatus, tasks
 from sweeper.abstractions import StaleTask
 
 
-async def _lock_unpublished(connection: AsyncConnection, grace: timedelta) -> list[uuid.UUID]:
-    query = (
-        sa.select(tasks.c.id)
-        .where(tasks.c.published.is_(False), tasks.c.created_at < sa.func.now() - grace)
-        .with_for_update(skip_locked=True)
-    )
-    return list((await connection.execute(query)).scalars())
-
-
-async def _mark_published(connection: AsyncConnection, task_id: uuid.UUID) -> None:
-    await connection.execute(tasks.update().where(tasks.c.id == task_id).values(published=True))
-
-
-async def _find_stale(connection: AsyncConnection, stale_after: timedelta) -> list[StaleTask]:
-    query = sa.select(tasks.c.id, (sa.func.now() - tasks.c.created_at).label("pending_for")).where(
-        tasks.c.status == TaskStatus.PENDING, tasks.c.created_at < sa.func.now() - stale_after
-    )
-    rows = await connection.execute(query)
-    return [StaleTask.model_validate(row._mapping) for row in rows]
-
-
 class PostgresUnpublishedBatch:
+    """Marks tasks published in the transaction holding their locks. A separate transaction
+    would wait for those same locks, which are released only when the batch ends."""
+
     def __init__(self, connection: AsyncConnection, task_ids: list[uuid.UUID]) -> None:
         self._connection = connection
         self._task_ids = task_ids
@@ -43,7 +25,9 @@ class PostgresUnpublishedBatch:
         return self._task_ids
 
     async def mark_published(self, task_id: uuid.UUID) -> None:
-        await _mark_published(self._connection, task_id)
+        await self._connection.execute(
+            tasks.update().where(tasks.c.id == task_id).values(published=True)
+        )
 
 
 class PostgresTaskStore:
@@ -52,10 +36,20 @@ class PostgresTaskStore:
 
     @asynccontextmanager
     async def lock_unpublished(self, grace: timedelta) -> AsyncIterator[PostgresUnpublishedBatch]:
+        query = (
+            sa.select(tasks.c.id)
+            .where(tasks.c.published.is_(False), tasks.c.created_at < sa.func.now() - grace)
+            .with_for_update(skip_locked=True)
+        )
         # One transaction for the batch: its commit releases the row locks.
         async with self._engine.begin() as connection:
-            yield PostgresUnpublishedBatch(connection, await _lock_unpublished(connection, grace))
+            task_ids = list((await connection.execute(query)).scalars())
+            yield PostgresUnpublishedBatch(connection, task_ids)
 
     async def find_stale(self, stale_after: timedelta) -> list[StaleTask]:
+        query = sa.select(
+            tasks.c.id, (sa.func.now() - tasks.c.created_at).label("pending_for")
+        ).where(tasks.c.status == TaskStatus.PENDING, tasks.c.created_at < sa.func.now() - stale_after)
         async with self._engine.connect() as connection:
-            return await _find_stale(connection, stale_after)
+            rows = await connection.execute(query)
+        return [StaleTask.model_validate(row._mapping) for row in rows]

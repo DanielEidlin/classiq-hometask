@@ -7,6 +7,7 @@ tasks meanwhile. Once the outage outlasts the retry policy the call raises
 """
 
 import functools
+import time
 import uuid
 from collections.abc import Callable
 from typing import assert_never, cast
@@ -14,6 +15,7 @@ from typing import assert_never, cast
 import sqlalchemy as sa
 import structlog
 import tenacity
+from pydantic import BaseModel
 
 from common.tasks import ErrorCode, TaskStatus, tasks
 from worker.abstractions import DatabaseUnavailable, StartedAttempt
@@ -45,16 +47,24 @@ def create_database_engine(database_url: str, timeout_seconds: float) -> sa.Engi
     )
 
 
-def retry_while_unavailable(
-    first_delay_seconds: float, max_delay_seconds: float, give_up_seconds: float
-) -> tenacity.Retrying:
-    """Retries a call while the database is unreachable, waiting `first_delay_seconds` and
-    doubling up to `max_delay_seconds`. It gives up rather than sleep past `give_up_seconds`,
-    raising `tenacity.RetryError`."""
+class DatabaseRetryPolicy(BaseModel, frozen=True):
+    """How long to keep retrying a call while the database is unreachable: waiting
+    `first_delay_seconds`, doubling up to `max_delay_seconds`, and giving up rather than
+    sleep past `give_up_seconds`."""
+
+    first_delay_seconds: float
+    max_delay_seconds: float
+    give_up_seconds: float
+
+
+def _retrying(policy: DatabaseRetryPolicy, sleep: Callable[[float], None]) -> tenacity.Retrying:
     return tenacity.Retrying(
         retry=tenacity.retry_if_exception_type(DATABASE_UNAVAILABLE_ERRORS),
-        wait=tenacity.wait_exponential(multiplier=first_delay_seconds, max=max_delay_seconds),
-        stop=tenacity.stop_before_delay(give_up_seconds),
+        wait=tenacity.wait_exponential(
+            multiplier=policy.first_delay_seconds, max=policy.max_delay_seconds
+        ),
+        stop=tenacity.stop_before_delay(policy.give_up_seconds),
+        sleep=sleep,
     )
 
 
@@ -118,9 +128,15 @@ def _log_failed_call(
 
 
 class PostgresTaskStore:
-    def __init__(self, engine: sa.Engine, retrying: tenacity.Retrying) -> None:
+    def __init__(
+        self,
+        engine: sa.Engine,
+        retry_policy: DatabaseRetryPolicy,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        """`sleep` waits between retries; tests pass one that doesn't."""
         self._engine = engine
-        self._retrying = retrying
+        self._retrying = _retrying(retry_policy, sleep)
 
     def start_attempt(self, task_id: uuid.UUID) -> StartedAttempt | None:
         return self._with_retries(task_id, functools.partial(_start_attempt, task_id=task_id))

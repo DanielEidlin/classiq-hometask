@@ -14,7 +14,7 @@ Conventions for code in this repository, drawn from review. Tooling already enfo
 - No nested functions. Write a private module-level function (`_name`) and bind arguments with `functools.partial` where needed.
 - One module per FastAPI router (`api/tasks.py`, `api/health.py`). `api/main.py` only builds the app, registers routers and installs error handling.
 - The API's Pydantic models (request and response bodies, stored outcomes) live in `api/models.py`; router modules hold only routes and the code they call.
-- Each service's database statements live in its `store.py`, behind the `TaskStore` protocol the rest of the service uses; `PostgresTaskStore` implements it. Each statement is its own small function named after what it does (`_start_attempt`, `_complete`, `_fetch_outcome`), returning a typed result. Write the query out in full inside it; pass several conditions to `.where(...)` rather than building `sa.and_(...)` in a separate variable.
+- Each service's database statements live in its `store.py`, behind the `TaskStore` protocol the rest of the service uses; `PostgresTaskStore` implements it. Each statement is written out in full in the store method named after what it does (`insert_task`, `fetch_outcome`), returning a typed result. Where the store runs every call through a wrapper, as the worker's retries do, the statement is a module function taking the connection (`_start_attempt`). Write the query out in full; pass several conditions to `.where(...)` rather than building `sa.and_(...)` in a separate variable.
 
 ## Dependencies and state
 

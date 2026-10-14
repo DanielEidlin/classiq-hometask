@@ -21,18 +21,25 @@ STALE_AFTER = timedelta(minutes=10)
 PENDING_FOR = timedelta(minutes=25)
 
 
-def _build_sweeper(store: FakeTaskStore, publisher: AsyncMock) -> Sweeper:
-    return Sweeper(store, publisher, grace=GRACE, stale_after=STALE_AFTER)
+@pytest.fixture
+def task_store() -> FakeTaskStore:
+    return FakeTaskStore()
 
 
-async def test_each_unpublished_task_is_published_then_marked(publisher: AsyncMock) -> None:
-    task_ids = [uuid.uuid4(), uuid.uuid4()]
-    store = FakeTaskStore(unpublished=task_ids)
+@pytest.fixture
+def sweeper(task_store: FakeTaskStore, publisher: AsyncMock) -> Sweeper:
+    return Sweeper(task_store, publisher, grace=GRACE, stale_after=STALE_AFTER)
 
-    await _build_sweeper(store, publisher).sweep()
 
-    assert publisher.publish.await_args_list == [call(task_id) for task_id in task_ids]
-    assert store.marked_published == task_ids
+async def test_each_unpublished_task_is_published_then_marked(
+    sweeper: Sweeper, task_store: FakeTaskStore, publisher: AsyncMock
+) -> None:
+    task_store.unpublished = [uuid.uuid4(), uuid.uuid4()]
+
+    await sweeper.sweep()
+
+    assert publisher.publish.await_args_list == [call(task_id) for task_id in task_store.unpublished]
+    assert task_store.marked_published == task_store.unpublished
 
 
 async def _reject_only(rejected_id: uuid.UUID, task_id: uuid.UUID) -> None:
@@ -41,27 +48,29 @@ async def _reject_only(rejected_id: uuid.UUID, task_id: uuid.UUID) -> None:
 
 
 async def test_a_rejected_publish_leaves_its_task_unmarked_and_the_pass_goes_on(
-    publisher: AsyncMock,
+    sweeper: Sweeper, task_store: FakeTaskStore, publisher: AsyncMock
 ) -> None:
     rejected_id, accepted_id = uuid.uuid4(), uuid.uuid4()
-    store = FakeTaskStore(unpublished=[rejected_id, accepted_id])
+    task_store.unpublished = [rejected_id, accepted_id]
     publisher.publish.side_effect = functools.partial(_reject_only, rejected_id)
 
     with structlog.testing.capture_logs() as logs:
-        await _build_sweeper(store, publisher).sweep()
+        await sweeper.sweep()
 
-    assert store.marked_published == [accepted_id]
+    assert task_store.marked_published == [accepted_id]
     failures = [entry for entry in logs if entry["event"] == "publish_failed"]
     assert [entry["task_id"] for entry in failures] == [str(rejected_id)]
     assert failures[0]["log_level"] == "warning"
 
 
-async def test_stale_task_is_logged_and_not_republished(publisher: AsyncMock) -> None:
+async def test_stale_task_is_logged_and_not_republished(
+    sweeper: Sweeper, task_store: FakeTaskStore, publisher: AsyncMock
+) -> None:
     stale_id = uuid.uuid4()
-    store = FakeTaskStore(stale=[StaleTask(id=stale_id, pending_for=PENDING_FOR)])
+    task_store.stale = [StaleTask(id=stale_id, pending_for=PENDING_FOR)]
 
     with structlog.testing.capture_logs() as logs:
-        await _build_sweeper(store, publisher).sweep()
+        await sweeper.sweep()
 
     assert {
         "event": "stale_task",
@@ -72,21 +81,23 @@ async def test_stale_task_is_logged_and_not_republished(publisher: AsyncMock) ->
     publisher.publish.assert_not_awaited()
 
 
-async def test_tasks_are_published_while_their_batch_still_holds_them(publisher: AsyncMock) -> None:
+async def _record_batch_open(
+    task_store: FakeTaskStore, batch_open_at_each_publish: list[bool], task_id: uuid.UUID
+) -> None:
+    batch_open_at_each_publish.append(task_store.batch_open)
+
+
+async def test_tasks_are_published_while_their_batch_still_holds_them(
+    sweeper: Sweeper, task_store: FakeTaskStore, publisher: AsyncMock
+) -> None:
     """The batch's locks keep other sweepers off these tasks only while it is open."""
-    store = FakeTaskStore(unpublished=[uuid.uuid4(), uuid.uuid4()])
+    task_store.unpublished = [uuid.uuid4(), uuid.uuid4()]
     batch_open_at_each_publish: list[bool] = []
     publisher.publish.side_effect = functools.partial(
-        _record_batch_open, store, batch_open_at_each_publish
+        _record_batch_open, task_store, batch_open_at_each_publish
     )
 
-    await _build_sweeper(store, publisher).sweep()
+    await sweeper.sweep()
 
     assert batch_open_at_each_publish == [True, True]
-    assert not store.batch_open
-
-
-async def _record_batch_open(
-    store: FakeTaskStore, batch_open_at_each_publish: list[bool], task_id: uuid.UUID
-) -> None:
-    batch_open_at_each_publish.append(store.batch_open)
+    assert not task_store.batch_open

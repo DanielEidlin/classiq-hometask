@@ -58,7 +58,6 @@ class TaskHandler:
 
         started = self._store.start_attempt(task_id)
         if started is None:
-            # A separate read: starting an attempt can't tell a final task from a missing one.
             status = self._store.fetch_status(task_id)
             if status is None:
                 task_log.info("task_skipped", reason="not found")

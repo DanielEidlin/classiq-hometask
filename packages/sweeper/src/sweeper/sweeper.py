@@ -25,8 +25,6 @@ class Sweeper:
         await self._report_stale()
 
     async def _publish_unpublished(self) -> None:
-        # The batch keeps its tasks locked until every one has been published, so a second
-        # sweeper skips them instead of publishing them again.
         async with self._store.lock_unpublished(self._grace) as batch:
             for task_id in batch.task_ids:
                 try:

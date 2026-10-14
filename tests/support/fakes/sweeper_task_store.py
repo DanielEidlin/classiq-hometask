@@ -27,11 +27,9 @@ class FakeTaskStore:
     It doesn't imitate the database: locking is tested on the real store.
     """
 
-    def __init__(
-        self, unpublished: list[uuid.UUID] | None = None, stale: list[StaleTask] | None = None
-    ) -> None:
-        self._unpublished = unpublished or []
-        self._stale = stale or []
+    def __init__(self) -> None:
+        self.unpublished: list[uuid.UUID] = []
+        self.stale: list[StaleTask] = []
         self.marked_published: list[uuid.UUID] = []
         self.batch_open = False
 
@@ -39,9 +37,9 @@ class FakeTaskStore:
     async def lock_unpublished(self, grace: timedelta) -> AsyncIterator[FakeUnpublishedBatch]:
         self.batch_open = True
         try:
-            yield FakeUnpublishedBatch(self._unpublished, self.marked_published)
+            yield FakeUnpublishedBatch(self.unpublished, self.marked_published)
         finally:
             self.batch_open = False
 
     async def find_stale(self, stale_after: timedelta) -> list[StaleTask]:
-        return self._stale
+        return self.stale

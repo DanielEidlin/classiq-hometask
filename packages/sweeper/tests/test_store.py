@@ -37,13 +37,6 @@ async def _insert_task(
     return task_id
 
 
-async def _is_published(engine: AsyncEngine, task_id: uuid.UUID) -> bool:
-    async with engine.connect() as connection:
-        query = sa.select(tasks.c.published).where(tasks.c.id == task_id)
-        published: bool = (await connection.execute(query)).scalar_one()
-    return published
-
-
 async def test_only_unpublished_tasks_older_than_the_grace_period_are_locked(
     engine: AsyncEngine,
 ) -> None:
@@ -71,11 +64,12 @@ async def test_only_tasks_marked_in_the_batch_are_published_once_it_ends(
     marked_id = await _insert_task(engine, age=GRACE * 2)
     unmarked_id = await _insert_task(engine, age=GRACE * 2)
 
-    async with PostgresTaskStore(engine).lock_unpublished(GRACE) as batch:
+    store = PostgresTaskStore(engine)
+    async with store.lock_unpublished(GRACE) as batch:
         await batch.mark_published(marked_id)
 
-    assert await _is_published(engine, marked_id)
-    assert not await _is_published(engine, unmarked_id)
+    async with store.lock_unpublished(GRACE) as next_batch:
+        assert next_batch.task_ids == [unmarked_id]
 
 
 async def test_only_tasks_pending_longer_than_the_limit_are_stale(engine: AsyncEngine) -> None:

@@ -2,31 +2,36 @@
 database is unreachable."""
 
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 
 import pytest
 import sqlalchemy as sa
-import tenacity
 from structlog.testing import capture_logs
 
 from common.tasks import ErrorCode, TaskStatus, tasks
 from fakes.database_outage import DatabaseOutage
 from worker.abstractions import DatabaseUnavailable, StartedAttempt
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
-from worker.store import PostgresTaskStore, create_database_engine, retry_while_unavailable
+from worker.store import DatabaseRetryPolicy, PostgresTaskStore, create_database_engine
 
 CIRCUIT = "OPENQASM 3.0;"
 FIRST_COUNTS = {"00": 1024}
 SECOND_COUNTS = {"11": 1024}
 FIRST_DELAY_SECONDS = 1.0
 MAX_DELAY_SECONDS = 30.0
-GIVE_UP_SECONDS = 240.0
-# Enough failed calls to show the doubling, the cap, and the delays after it.
-FAILED_CALLS_SHOWN = 8
-# The outage tests give up after this many failed calls instead of after a delay.
-FAILED_CALLS_BEFORE_GIVING_UP = 4
-# The backoff between those four failed calls.
+# The tests' sleeps don't advance the clock, so the store gives up once the next delay alone
+# would pass the give-up time: after the delays of 1, 2 and 4 seconds, as the next is 8.
+GIVE_UP_SECONDS = 5.0
+POLICY = DatabaseRetryPolicy(
+    first_delay_seconds=FIRST_DELAY_SECONDS,
+    max_delay_seconds=MAX_DELAY_SECONDS,
+    give_up_seconds=GIVE_UP_SECONDS,
+)
 DELAYS_UNTIL_GIVING_UP = [1.0, 2.0, 4.0]
+FAILED_CALLS_BEFORE_GIVING_UP = len(DELAYS_UNTIL_GIVING_UP) + 1
+# Past the delay cap, so the backoff can be seen reaching it; the outage ends the retries.
+POLICY_PAST_THE_CAP = POLICY.model_copy(update={"give_up_seconds": 2 * MAX_DELAY_SECONDS})
+DELAYS_UP_TO_THE_CAP = [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]
 FAILED_CALLS_BEFORE_RECOVERY = 2
 DB_TIMEOUT_SECONDS = 1
 # Longer than DB_TIMEOUT_SECONDS, so the query only returns if nothing times it out.
@@ -53,21 +58,11 @@ def _fetch_task(engine: sa.Engine, task_id: uuid.UUID) -> sa.RowMapping:
         return connection.execute(sa.select(tasks).where(tasks.c.id == task_id)).mappings().one()
 
 
-def _retrying() -> tenacity.Retrying:
-    return retry_while_unavailable(FIRST_DELAY_SECONDS, MAX_DELAY_SECONDS, GIVE_UP_SECONDS)
-
-
-def _discard_sleep(seconds: float) -> None:
-    return None
-
-
-def _store(engine: sa.Engine, sleep: Callable[[float], None] = _discard_sleep) -> PostgresTaskStore:
-    """The production retry and backoff, giving up after a number of failed calls rather
-    than after a delay, so that sleeping can be skipped."""
-    retrying = _retrying().copy(
-        stop=tenacity.stop_after_attempt(FAILED_CALLS_BEFORE_GIVING_UP), sleep=sleep
-    )
-    return PostgresTaskStore(engine, retrying)
+def _store(
+    engine: sa.Engine, sleeps: list[float] | None = None, policy: DatabaseRetryPolicy = POLICY
+) -> PostgresTaskStore:
+    """A store whose sleeps between retries are recorded in `sleeps` instead of waited out."""
+    return PostgresTaskStore(engine, policy, sleep=(sleeps if sleeps is not None else []).append)
 
 
 @pytest.fixture
@@ -160,13 +155,15 @@ def test_a_second_outcome_is_discarded_and_the_first_kept(db_engine: sa.Engine) 
     assert task["attempts"] == 2
 
 
-def test_calls_are_retried_then_given_up_on_while_the_database_stays_unreachable(
+
+
+def test_calls_are_retried_with_backoff_then_given_up_on_while_the_database_stays_unreachable(
     outage_engine: sa.Engine,
 ) -> None:
     task_id = _insert_task(outage_engine)
     outage = DatabaseOutage(outage_engine)
     sleeps: list[float] = []
-    store = _store(outage_engine, sleeps.append)
+    store = _store(outage_engine, sleeps)
     outage.down = True
 
     with capture_logs() as logs, pytest.raises(DatabaseUnavailable):
@@ -180,6 +177,20 @@ def test_calls_are_retried_then_given_up_on_while_the_database_stays_unreachable
     )
     outage.down = False
     assert _fetch_task(outage_engine, task_id)["status"] == TaskStatus.PENDING
+
+
+def test_backoff_doubles_until_it_reaches_the_cap_and_then_stays_there(
+    outage_engine: sa.Engine,
+) -> None:
+    task_id = _insert_task(outage_engine)
+    outage = DatabaseOutage(outage_engine)
+    outage.recover_after_failures = len(DELAYS_UP_TO_THE_CAP)
+    outage.down = True
+    sleeps: list[float] = []
+
+    _store(outage_engine, sleeps, POLICY_PAST_THE_CAP).fetch_status(task_id)
+
+    assert sleeps == DELAYS_UP_TO_THE_CAP
 
 
 def test_outcome_is_recorded_once_the_database_recovers_during_the_retries(
@@ -209,41 +220,6 @@ def test_no_attempt_is_counted_while_the_database_is_unreachable(outage_engine: 
     assert _fetch_task(outage_engine, task_id)["attempts"] == 0
 
 
-def _retry_state(retrying: tenacity.Retrying, failed_calls: int) -> tenacity.RetryCallState:
-    retry_state = tenacity.RetryCallState(retry_object=retrying, fn=None, args=(), kwargs={})
-    retry_state.attempt_number = failed_calls
-    return retry_state
-
-
-def test_backoff_doubles_until_it_reaches_the_cap_and_then_stays_there() -> None:
-    retrying = _retrying()
-
-    delays = [
-        retrying.wait(_retry_state(retrying, failed_calls))
-        for failed_calls in range(1, FAILED_CALLS_SHOWN + 1)
-    ]
-
-    assert delays == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]
-
-
-@pytest.mark.parametrize(
-    ("seconds_since_start", "upcoming_sleep", "gives_up"),
-    [
-        pytest.param(200.0, 30.0, False, id="the next sleep ends before the give-up time"),
-        pytest.param(220.0, 30.0, True, id="the next sleep would pass the give-up time"),
-    ],
-)
-def test_retrying_gives_up_rather_than_sleep_past_the_give_up_time(
-    seconds_since_start: float, upcoming_sleep: float, gives_up: bool
-) -> None:
-    retrying = _retrying()
-    retry_state = _retry_state(retrying, failed_calls=1)
-    retry_state.outcome_timestamp = retry_state.start_time + seconds_since_start
-    retry_state.upcoming_sleep = upcoming_sleep
-
-    assert retrying.stop(retry_state) is gives_up
-
-
 @pytest.mark.parametrize(
     "error",
     [
@@ -252,25 +228,35 @@ def test_retrying_gives_up_rather_than_sleep_past_the_give_up_time(
         pytest.param(sa.exc.TimeoutError(), id="pool exhausted"),
     ],
 )
-def test_unreachable_database_errors_are_retried(error: Exception) -> None:
-    retrying = _retrying()
-    retry_state = _retry_state(retrying, failed_calls=1)
-    retry_state.set_exception((type(error), error, None))
+def test_unreachable_database_errors_are_retried(
+    outage_engine: sa.Engine, error: Exception
+) -> None:
+    task_id = _insert_task(outage_engine)
+    outage = DatabaseOutage(outage_engine, error)
+    outage.recover_after_failures = 1
+    outage.down = True
+    sleeps: list[float] = []
 
-    assert retrying.retry(retry_state)
+    assert _store(outage_engine, sleeps).fetch_status(task_id) == TaskStatus.PENDING
+    assert sleeps == [FIRST_DELAY_SECONDS]
 
 
-def test_other_database_errors_are_not_retried() -> None:
-    retrying = _retrying()
-    retry_state = _retry_state(retrying, failed_calls=1)
-    error = sa.exc.IntegrityError("", {}, Exception())
-    retry_state.set_exception((type(error), error, None))
+def test_other_database_errors_are_raised_without_a_retry(outage_engine: sa.Engine) -> None:
+    task_id = _insert_task(outage_engine)
+    outage = DatabaseOutage(outage_engine, sa.exc.IntegrityError("", {}, Exception()))
+    outage.down = True
+    sleeps: list[float] = []
 
-    assert not retrying.retry(retry_state)
+    with pytest.raises(sa.exc.IntegrityError):
+        _store(outage_engine, sleeps).fetch_status(task_id)
+
+    assert sleeps == []
 
 
 def test_database_calls_time_out_instead_of_hanging(db_engine: sa.Engine) -> None:
-    engine = create_database_engine(db_engine.url.render_as_string(hide_password=False), DB_TIMEOUT_SECONDS)
+    engine = create_database_engine(
+        db_engine.url.render_as_string(hide_password=False), DB_TIMEOUT_SECONDS
+    )
     try:
         with pytest.raises(sa.exc.OperationalError), engine.connect() as connection:
             connection.execute(sa.select(sa.func.pg_sleep(QUERY_SECONDS)))

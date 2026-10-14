@@ -9,7 +9,7 @@ import uuid
 import sqlalchemy as sa
 import structlog
 from pydantic import TypeAdapter
-from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine
 
 from api.models import TaskOutcome
 from common.tasks import tasks
@@ -19,45 +19,31 @@ log = structlog.get_logger()
 _task_outcome = TypeAdapter[TaskOutcome](TaskOutcome)
 
 
-async def _insert_task(connection: AsyncConnection, task_id: uuid.UUID, circuit: str) -> None:
-    await connection.execute(tasks.insert().values(id=task_id, circuit=circuit))
-
-
-async def _mark_published(connection: AsyncConnection, task_id: uuid.UUID) -> None:
-    await connection.execute(tasks.update().where(tasks.c.id == task_id).values(published=True))
-
-
-async def _delete_task(connection: AsyncConnection, task_id: uuid.UUID) -> None:
-    await connection.execute(tasks.delete().where(tasks.c.id == task_id))
-
-
-async def _fetch_outcome(connection: AsyncConnection, task_id: uuid.UUID) -> TaskOutcome | None:
-    query = sa.select(tasks.c.status, tasks.c.result, tasks.c.error_message).where(
-        tasks.c.id == task_id
-    )
-    row = (await connection.execute(query)).one_or_none()
-    return None if row is None else _task_outcome.validate_python(dict(row._mapping))
-
-
 class PostgresTaskStore:
     def __init__(self, engine: AsyncEngine) -> None:
         self._engine = engine
 
     async def insert_task(self, task_id: uuid.UUID, circuit: str) -> None:
         async with self._engine.begin() as connection:
-            await _insert_task(connection, task_id, circuit)
+            await connection.execute(tasks.insert().values(id=task_id, circuit=circuit))
 
     async def mark_published(self, task_id: uuid.UUID) -> None:
         async with self._engine.begin() as connection:
-            await _mark_published(connection, task_id)
+            await connection.execute(
+                tasks.update().where(tasks.c.id == task_id).values(published=True)
+            )
 
     async def delete_task(self, task_id: uuid.UUID) -> None:
         async with self._engine.begin() as connection:
-            await _delete_task(connection, task_id)
+            await connection.execute(tasks.delete().where(tasks.c.id == task_id))
 
     async def fetch_outcome(self, task_id: uuid.UUID) -> TaskOutcome | None:
+        query = sa.select(tasks.c.status, tasks.c.result, tasks.c.error_message).where(
+            tasks.c.id == task_id
+        )
         async with self._engine.connect() as connection:
-            return await _fetch_outcome(connection, task_id)
+            row = (await connection.execute(query)).one_or_none()
+        return None if row is None else _task_outcome.validate_python(dict(row._mapping))
 
     async def is_reachable(self) -> bool:
         try:
