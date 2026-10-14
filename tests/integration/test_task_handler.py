@@ -6,7 +6,6 @@ deterministic.
 """
 
 import uuid
-from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -25,13 +24,24 @@ FIRST_COUNTS = {"00": 1024}
 SECOND_COUNTS = {"11": 1024}
 
 
-def _insert_task(engine: sa.Engine, **values: Any) -> uuid.UUID:
+def _insert_task(
+    engine: sa.Engine,
+    status: TaskStatus = TaskStatus.PENDING,
+    attempts: int = 0,
+    result: dict[str, int] | None = None,
+) -> uuid.UUID:
     # Marked published, so the stack's sweeper never hands it to the real workers.
     task_id = uuid.uuid4()
+    statement = tasks.insert().values(
+        id=task_id,
+        circuit=BELL_CIRCUIT,
+        published=True,
+        status=status,
+        attempts=attempts,
+        result=result,
+    )
     with engine.begin() as connection:
-        connection.execute(
-            tasks.insert().values(id=task_id, circuit=BELL_CIRCUIT, published=True, **values)
-        )
+        connection.execute(statement)
     return task_id
 
 

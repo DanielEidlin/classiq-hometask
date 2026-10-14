@@ -81,6 +81,35 @@ def _fail(connection: sa.Connection, task_id: uuid.UUID, code: ErrorCode, messag
     return connection.execute(statement).rowcount == 1
 
 
+def _record(connection: sa.Connection, task_id: uuid.UUID, outcome: SimulationOutcome) -> bool:
+    match outcome:
+        case SimulationCompleted(counts=counts):
+            return _complete(connection, task_id, counts)
+        case SimulationFailed(code=code, message=message):
+            return _fail(connection, task_id, code, message)
+        case _:
+            assert_never(outcome)
+
+
+def _log_recorded(task_log: structlog.typing.FilteringBoundLogger, outcome: SimulationOutcome) -> None:
+    match outcome:
+        case SimulationCompleted():
+            task_log.info("task_completed")
+        case SimulationFailed(code=code, message=message, traceback=traceback):
+            # A traceback means something raised, and workers lost on every attempt suggest a
+            # circuit that crashes them: faults to investigate, not just a bad circuit. The
+            # traceback crossed the process boundary as text, so it's logged as a field.
+            if traceback is not None:
+                log_failure = task_log.error
+            elif code == ErrorCode.WORKER_LOST:
+                log_failure = task_log.warning
+            else:
+                log_failure = task_log.info
+            log_failure("task_failed", error_code=code, message=message, traceback=traceback)
+        case _:
+            assert_never(outcome)
+
+
 class TaskHandler:
     def __init__(self, engine: sa.Engine, simulation: Simulation, max_attempts: int) -> None:
         self._engine = engine
@@ -102,38 +131,18 @@ class TaskHandler:
             return
         task_log.info("task_started", attempt=claimed.attempts)
 
+        outcome: SimulationOutcome
         if claimed.attempts > self._max_attempts:
-            message = WORKER_LOST_MESSAGE.format(max_attempts=self._max_attempts)
-            with self._engine.begin() as connection:
-                recorded = _fail(connection, task_id, ErrorCode.WORKER_LOST, message)
-            if recorded:
-                # Workers keep dying on this task: likely a fault to investigate.
-                task_log.warning("task_failed", error_code=ErrorCode.WORKER_LOST, message=message)
-                return
+            outcome = SimulationFailed(
+                code=ErrorCode.WORKER_LOST,
+                message=WORKER_LOST_MESSAGE.format(max_attempts=self._max_attempts),
+            )
+        else:
+            outcome = self._simulation(claimed.circuit)
+
+        with self._engine.begin() as connection:
+            recorded = _record(connection, task_id, outcome)
+        if recorded:
+            _log_recorded(task_log, outcome)
+        else:
             task_log.info("duplicate_result_discarded")
-            return
-
-        outcome = self._simulation(claimed.circuit)
-
-        match outcome:
-            case SimulationCompleted(counts=counts):
-                with self._engine.begin() as connection:
-                    recorded = _complete(connection, task_id, counts)
-                if recorded:
-                    task_log.info("task_completed")
-                    return
-            case SimulationFailed(code=code, message=message, traceback=traceback):
-                with self._engine.begin() as connection:
-                    recorded = _fail(connection, task_id, code, message)
-                if recorded:
-                    # A traceback means something raised: a fault to investigate, not just a
-                    # bad circuit. It crossed the process boundary as text, so it's logged as
-                    # a field.
-                    log_failure = task_log.info if traceback is None else task_log.error
-                    log_failure(
-                        "task_failed", error_code=code, message=message, traceback=traceback
-                    )
-                    return
-            case _:
-                assert_never(outcome)
-        task_log.info("duplicate_result_discarded")
