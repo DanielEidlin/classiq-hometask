@@ -14,7 +14,7 @@ from common.domain.tasks import ErrorCode, TaskStatus
 from tests.support.fakes.worker_task_store import FakeTaskStore
 from worker.business.handler import WORKER_LOST_MESSAGE, TaskHandler
 from worker.domain.abstractions import DatabaseUnavailable, StartedAttempt
-from worker.domain.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
+from worker.domain.outcomes import SimulationCompleted, SimulationFailed
 
 MAX_ATTEMPTS = 3
 # Never simulated: every test replaces the circuit runner.
@@ -23,15 +23,16 @@ COUNTS = {"00": 1024}
 FIRST_ATTEMPT = StartedAttempt(circuit=CIRCUIT, number=1)
 
 
-def _runner(outcome: SimulationOutcome = SimulationCompleted(counts=COUNTS)) -> Mock:
+@pytest.fixture
+def circuit_runner() -> Mock:
+    """A runner whose simulation completes with `COUNTS`."""
     circuit_runner = Mock(spec_set=["run"])
-    circuit_runner.run.return_value = outcome
+    circuit_runner.run.return_value = SimulationCompleted(counts=COUNTS)
     return circuit_runner
 
 
-def test_the_circuit_is_simulated_and_its_outcome_recorded() -> None:
+def test_the_circuit_is_simulated_and_its_outcome_recorded(circuit_runner: Mock) -> None:
     store = FakeTaskStore(started=FIRST_ATTEMPT)
-    circuit_runner = _runner()
 
     with capture_logs() as logs:
         TaskHandler(store, circuit_runner, MAX_ATTEMPTS).handle(uuid.uuid4())
@@ -41,10 +42,10 @@ def test_the_circuit_is_simulated_and_its_outcome_recorded() -> None:
     assert "task_completed" in [entry["event"] for entry in logs]
 
 
-def test_task_past_the_attempt_cap_fails_with_worker_lost_without_simulating() -> None:
+def test_task_past_the_attempt_cap_fails_with_worker_lost_without_simulating(
+    circuit_runner: Mock,
+) -> None:
     store = FakeTaskStore(started=StartedAttempt(circuit=CIRCUIT, number=MAX_ATTEMPTS + 1))
-    circuit_runner = _runner()
-
     TaskHandler(store, circuit_runner, MAX_ATTEMPTS).handle(uuid.uuid4())
 
     circuit_runner.run.assert_not_called()
@@ -56,31 +57,27 @@ def test_task_past_the_attempt_cap_fails_with_worker_lost_without_simulating() -
     ]
 
 
-def test_task_at_the_attempt_cap_is_still_simulated() -> None:
+def test_task_at_the_attempt_cap_is_still_simulated(circuit_runner: Mock) -> None:
     store = FakeTaskStore(started=StartedAttempt(circuit=CIRCUIT, number=MAX_ATTEMPTS))
-    circuit_runner = _runner()
-
     TaskHandler(store, circuit_runner, MAX_ATTEMPTS).handle(uuid.uuid4())
 
     circuit_runner.run.assert_called_once_with(CIRCUIT)
 
 
-def test_an_outcome_another_attempt_beat_is_logged_as_discarded() -> None:
+def test_an_outcome_another_attempt_beat_is_logged_as_discarded(circuit_runner: Mock) -> None:
     task_id = uuid.uuid4()
     store = FakeTaskStore(started=FIRST_ATTEMPT, outcome_is_first=False)
 
     with capture_logs() as logs:
-        TaskHandler(store, _runner(), MAX_ATTEMPTS).handle(task_id)
+        TaskHandler(store, circuit_runner, MAX_ATTEMPTS).handle(task_id)
 
     assert {"event": "duplicate_result_discarded", "task_id": str(task_id), "log_level": "info"} in logs
     assert "task_completed" not in [entry["event"] for entry in logs]
 
 
-def test_final_task_is_skipped() -> None:
+def test_final_task_is_skipped(circuit_runner: Mock) -> None:
     task_id = uuid.uuid4()
     store = FakeTaskStore(started=None, status=TaskStatus.COMPLETED)
-    circuit_runner = _runner()
-
     with capture_logs() as logs:
         TaskHandler(store, circuit_runner, MAX_ATTEMPTS).handle(task_id)
 
@@ -95,11 +92,9 @@ def test_final_task_is_skipped() -> None:
     } in logs
 
 
-def test_missing_task_is_skipped() -> None:
+def test_missing_task_is_skipped(circuit_runner: Mock) -> None:
     task_id = uuid.uuid4()
     store = FakeTaskStore(started=None, status=None)
-    circuit_runner = _runner()
-
     with capture_logs() as logs:
         TaskHandler(store, circuit_runner, MAX_ATTEMPTS).handle(task_id)
 
@@ -112,9 +107,9 @@ def test_missing_task_is_skipped() -> None:
     } in logs
 
 
-def test_an_unavailable_database_stops_the_task_before_it_is_simulated() -> None:
-    circuit_runner = _runner()
-
+def test_an_unavailable_database_stops_the_task_before_it_is_simulated(
+    circuit_runner: Mock,
+) -> None:
     with pytest.raises(DatabaseUnavailable):
         TaskHandler(FakeTaskStore(unavailable=True), circuit_runner, MAX_ATTEMPTS).handle(uuid.uuid4())
 

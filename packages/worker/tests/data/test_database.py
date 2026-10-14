@@ -2,11 +2,8 @@ import pytest
 import sqlalchemy as sa
 import tenacity
 
-from worker.data.database import create_database_engine, retry_while_unavailable
+from worker.data.database import create_database_engine
 
-FIRST_DELAY_SECONDS = 1.0
-MAX_DELAY_SECONDS = 30.0
-GIVE_UP_SECONDS = 240.0
 # Enough failed calls to show the doubling, the cap, and the delays after it.
 FAILED_CALLS_SHOWN = 8
 DB_TIMEOUT_SECONDS = 1
@@ -20,12 +17,9 @@ def _retry_state(retrying: tenacity.Retrying, failed_calls: int) -> tenacity.Ret
     return retry_state
 
 
-def _retrying() -> tenacity.Retrying:
-    return retry_while_unavailable(FIRST_DELAY_SECONDS, MAX_DELAY_SECONDS, GIVE_UP_SECONDS)
-
-
-def test_backoff_doubles_until_it_reaches_the_cap_and_then_stays_there() -> None:
-    retrying = _retrying()
+def test_backoff_doubles_until_it_reaches_the_cap_and_then_stays_there(
+    retrying: tenacity.Retrying,
+) -> None:
 
     delays = [
         retrying.wait(_retry_state(retrying, failed_calls))
@@ -43,9 +37,8 @@ def test_backoff_doubles_until_it_reaches_the_cap_and_then_stays_there() -> None
     ],
 )
 def test_retrying_gives_up_rather_than_sleep_past_the_give_up_time(
-    seconds_since_start: float, upcoming_sleep: float, gives_up: bool
+    retrying: tenacity.Retrying, seconds_since_start: float, upcoming_sleep: float, gives_up: bool
 ) -> None:
-    retrying = _retrying()
     retry_state = _retry_state(retrying, failed_calls=1)
     retry_state.outcome_timestamp = retry_state.start_time + seconds_since_start
     retry_state.upcoming_sleep = upcoming_sleep
@@ -61,16 +54,16 @@ def test_retrying_gives_up_rather_than_sleep_past_the_give_up_time(
         pytest.param(sa.exc.TimeoutError(), id="pool exhausted"),
     ],
 )
-def test_unreachable_database_errors_are_retried(error: Exception) -> None:
-    retrying = _retrying()
+def test_unreachable_database_errors_are_retried(
+    retrying: tenacity.Retrying, error: Exception
+) -> None:
     retry_state = _retry_state(retrying, failed_calls=1)
     retry_state.set_exception((type(error), error, None))
 
     assert retrying.retry(retry_state)
 
 
-def test_other_database_errors_are_not_retried() -> None:
-    retrying = _retrying()
+def test_other_database_errors_are_not_retried(retrying: tenacity.Retrying) -> None:
     retry_state = _retry_state(retrying, failed_calls=1)
     error = sa.exc.IntegrityError("", {}, Exception())
     retry_state.set_exception((type(error), error, None))

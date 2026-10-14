@@ -20,7 +20,8 @@ PASS_DURATION_SECONDS = 0.05
 NO_INTERVAL_SECONDS = 0
 
 
-def _build_sweeper() -> AsyncMock:
+@pytest.fixture
+def sweeper() -> AsyncMock:
     return cast(AsyncMock, create_autospec(Sweeper, instance=True))
 
 
@@ -40,8 +41,9 @@ async def _fail_first_then_stop(stop_event: asyncio.Event, sweeper: AsyncMock) -
     stop_event.set()
 
 
-async def test_a_stop_during_a_pass_lets_the_pass_finish_then_returns(tmp_path: Path) -> None:
-    sweeper = _build_sweeper()
+async def test_a_stop_during_a_pass_lets_the_pass_finish_then_returns(
+    tmp_path: Path, sweeper: AsyncMock
+) -> None:
     stop_event = asyncio.Event()
     pass_finished = asyncio.Event()
     sweeper.sweep.side_effect = functools.partial(
@@ -58,9 +60,8 @@ async def test_a_stop_during_a_pass_lets_the_pass_finish_then_returns(tmp_path: 
 
 
 async def test_a_stop_between_passes_returns_without_waiting_out_the_interval(
-    tmp_path: Path,
+    tmp_path: Path, sweeper: AsyncMock
 ) -> None:
-    sweeper = _build_sweeper()
     stop_event = asyncio.Event()
     asyncio.get_running_loop().call_later(STOP_DELAY_SECONDS, stop_event.set)
 
@@ -72,8 +73,9 @@ async def test_a_stop_between_passes_returns_without_waiting_out_the_interval(
     sweeper.sweep.assert_awaited_once()
 
 
-async def test_a_failed_pass_is_retried_on_the_next_interval(tmp_path: Path) -> None:
-    sweeper = _build_sweeper()
+async def test_a_failed_pass_is_retried_on_the_next_interval(
+    tmp_path: Path, sweeper: AsyncMock
+) -> None:
     stop_event = asyncio.Event()
     sweeper.sweep.side_effect = functools.partial(_fail_first_then_stop, stop_event, sweeper)
     heartbeat = tmp_path / "heartbeat"
