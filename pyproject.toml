@@ -23,7 +23,7 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["packages", "tests"]
 addopts = "--import-mode=importlib"
-pythonpath = ["tests/integration", "tests/support"]
+pythonpath = ["."]
 markers = [
     "integration: needs the full Docker Compose stack",
     "resilience: stops or restarts parts of the stack; runs after the other tests",
@@ -33,6 +33,6 @@ markers = [
 python_version = "3.12"
 strict = true
 ignore_missing_imports = true
-mypy_path = "tests/integration,tests/support,packages/api/src,packages/common/src,packages/worker/src,packages/sweeper/src"
+mypy_path = "packages/api/src,packages/common/src,packages/worker/src,packages/sweeper/src"
 explicit_package_bases = true
 files = ["packages/*/src", "packages/*/tests", "packages/common/migrations", "tests"]

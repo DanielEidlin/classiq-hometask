@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 from api.presentation.tasks import SERVICE_BUSY_MESSAGE
 from api.settings import RETRY_AFTER_SECONDS
 from common.data.publisher import PublishFailed
-from fakes.api_task_store import FakeTaskStore
+from tests.support.fakes.api_task_store import FakeTaskStore
 
 CIRCUIT = "OPENQASM 3.0;"
 

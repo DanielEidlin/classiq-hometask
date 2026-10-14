@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 
 from api.main import INTERNAL_SERVER_ERROR_MESSAGE, app
 from api.presentation.dependencies import get_task_store
-from fakes.api_task_store import BrokenTaskStore
+from tests.support.fakes.api_task_store import BrokenTaskStore
 
 
 def test_unexpected_error_returns_500_in_the_error_shape(client: TestClient) -> None:

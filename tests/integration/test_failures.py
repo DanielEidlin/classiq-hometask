@@ -1,9 +1,9 @@
 import httpx
 import pytest
 
-from api_client import poll_until_final, submit_task
-from circuits import NON_TERMINATING_CIRCUIT
-from stack import TASK_TIMEOUT_SECONDS
+from tests.integration.api_client import poll_until_final, submit_task
+from tests.integration.circuits import NON_TERMINATING_CIRCUIT
+from tests.integration.stack import TASK_TIMEOUT_SECONDS
 
 pytestmark = pytest.mark.integration
 

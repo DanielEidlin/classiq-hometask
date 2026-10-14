@@ -11,7 +11,7 @@ from structlog.testing import capture_logs
 
 from common.data.tables import tasks
 from common.domain.tasks import ErrorCode, TaskStatus
-from fakes.database_outage import DatabaseOutage
+from tests.support.fakes.database_outage import DatabaseOutage
 from worker.data.database import retry_while_unavailable
 from worker.data.store import PostgresTaskStore
 from worker.domain.abstractions import DatabaseUnavailable, StartedAttempt

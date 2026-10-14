@@ -11,7 +11,7 @@ import pytest
 from structlog.testing import capture_logs
 
 from common.domain.tasks import ErrorCode, TaskStatus
-from fakes.worker_task_store import FakeTaskStore
+from tests.support.fakes.worker_task_store import FakeTaskStore
 from worker.business.handler import WORKER_LOST_MESSAGE, TaskHandler
 from worker.domain.abstractions import DatabaseUnavailable, StartedAttempt
 from worker.domain.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
