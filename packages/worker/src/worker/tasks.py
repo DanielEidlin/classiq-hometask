@@ -9,7 +9,7 @@ import sqlalchemy as sa
 import structlog
 from pydantic import BaseModel
 
-from common.message import PROCESS_TASK_NAME
+from common.task_queue import PROCESS_TASK_NAME
 from common.tasks import ErrorCode, TaskStatus, tasks
 from worker import runner
 from worker.app import app

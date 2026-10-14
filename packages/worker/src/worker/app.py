@@ -6,14 +6,14 @@ from celery import Celery
 from kombu import Queue
 
 from common.log import configure_logging
-from common.message import TASK_QUEUE
+from common.task_queue import TASK_QUEUE, TASK_QUEUE_ARGUMENTS
 
 configure_logging("worker")
 
 app = Celery("worker", broker=os.environ["RABBITMQ_URL"], include=["worker.tasks"])
 app.conf.update(
     task_default_queue=TASK_QUEUE,
-    task_queues=[Queue(TASK_QUEUE, durable=True)],
+    task_queues=[Queue(TASK_QUEUE, durable=True, queue_arguments=TASK_QUEUE_ARGUMENTS)],
     task_acks_late=True,
     task_reject_on_worker_lost=True,
     task_ignore_result=True,
