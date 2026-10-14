@@ -36,6 +36,11 @@ class HealthResponse(BaseModel):
     status: Literal["ok"] = "ok"
 
 
+# Every 503 from the task routes, whatever the cause (queue full, broker or database down):
+# the client retries after `Retry-After` in each case, and the cause is logged.
+SERVICE_UNAVAILABLE_MESSAGE = "The service is temporarily unavailable. Try again later."
+
+
 class ErrorResponse(BaseModel):
     """The body of every error response; declared on the routes so the API docs show it."""
 

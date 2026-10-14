@@ -4,8 +4,9 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 
-from api.main import DATABASE_UNAVAILABLE_MESSAGE, INTERNAL_SERVER_ERROR_MESSAGE, app
+from api.main import INTERNAL_SERVER_ERROR_MESSAGE, app
 from api.presentation.dependencies import get_task_store
+from api.presentation.schemas import SERVICE_UNAVAILABLE_MESSAGE
 from api.settings import RETRY_AFTER_SECONDS
 from tests.support.fakes.api_task_store import BrokenTaskStore, UnavailableTaskStore
 
@@ -56,5 +57,5 @@ def test_an_unreachable_database_returns_503_with_retry_after(
 
     assert response.status_code == 503
     assert response.headers["Retry-After"] == str(RETRY_AFTER_SECONDS)
-    assert response.json() == {"status": "error", "message": DATABASE_UNAVAILABLE_MESSAGE}
+    assert response.json() == {"status": "error", "message": SERVICE_UNAVAILABLE_MESSAGE}
     publisher.publish.assert_not_awaited()

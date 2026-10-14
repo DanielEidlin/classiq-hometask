@@ -74,8 +74,7 @@ Counts always sum to the worker's shot count (1024 by default). Poll until `stat
 | 202 | `{"task_id": "<uuid>", "message": "Task submitted successfully."}` | The task is accepted: stored and published |
 | 400 | `{"status": "error", "message": "body.qc: Field required"}` | The body isn't JSON, or `qc` is missing, not a string or empty; the message names the problem |
 | 413 | `{"status": "error", "message": "Circuit is larger than the limit of 65536 bytes."}` | The circuit exceeds `MAX_CIRCUIT_BYTES` |
-| 503 | `{"status": "error", "message": "The service is busy. Submit the task again later."}` | The queue is full or RabbitMQ is unavailable; the `Retry-After` header says when to retry, and the task was not accepted |
-| 503 | `{"status": "error", "message": "The service is temporarily unavailable. Try again later."}` | Postgres is unreachable; with `Retry-After` |
+| 503 | `{"status": "error", "message": "The service is temporarily unavailable. Try again later."}` | The queue is full, or RabbitMQ or Postgres is unavailable; the `Retry-After` header says when to retry, and the task was not accepted |
 
 `GET /tasks/{task_id}`
 
@@ -85,7 +84,7 @@ Counts always sum to the worker's shot count (1024 by default). Poll until `stat
 | 200 | `{"status": "completed", "result": {"00": 518, "11": 506}}` | Simulated; `result` maps each measured bitstring to its count |
 | 200 | `{"status": "error", "message": "<reason>"}` | The task failed; see below |
 | 404 | `{"status": "error", "message": "Task not found."}` | No task has this ID (including IDs that aren't UUIDs) |
-| 503 | `{"status": "error", "message": "The service is temporarily unavailable. Try again later."}` | Postgres is unreachable; with `Retry-After` |
+| 503 | `{"status": "error", "message": "The service is temporarily unavailable. Try again later."}` | Postgres is unreachable; the `Retry-After` header says when to retry |
 
 A failed task's `message` explains why. Examples:
 
@@ -544,6 +543,7 @@ All values are configurable through environment variables and the Compose file.
 - **202** is the standard code for a request accepted for processing that has not completed, which is exactly what task submission is.
 - **One error shape.** FastAPI's default validation response (422 with a `detail` array) differs from every other error this API returns. Converting it lets clients handle all errors the same way.
 - **An unreachable database is 503, not 500.** The outage is temporary and the request may succeed if repeated, which is what 503 with `Retry-After` tells a client; 500 says the server is broken. The API's task store raises `DatabaseUnavailable` for the same errors the worker treats as an outage (decision 18), and one exception handler turns it into the 503. Any other database error remains a 500. On `POST /tasks` a 503 can still precede a run in one case: if Postgres becomes unreachable after the publish, while marking the task published or deleting it, the task may run, but its ID was never returned, so no one reads it (as in decision 11).
+- **One message for every 503 on the task routes,** whatever the cause: a full queue, or the broker or database being down. A client acts the same way in each case, retrying after `Retry-After`, and the cause is in the logs (`task_shed`, `database_unavailable`). `/health` keeps naming the unreachable dependency, because it is read by operators.
 - **The docs list every response.** Each route declares its error responses, the 500 that any route can return is added to all of them, and FastAPI's default 422, which this API never returns, is removed, so `/docs` matches the behaviour.
 
 ### 18. Tasks stuck in `pending`

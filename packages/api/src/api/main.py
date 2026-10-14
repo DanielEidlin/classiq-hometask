@@ -17,6 +17,7 @@ from api.data.store import PostgresTaskStore
 from api.domain.abstractions import DatabaseUnavailable
 from api.presentation import health, tasks
 from api.presentation.dependencies import AppState
+from api.presentation.schemas import SERVICE_UNAVAILABLE_MESSAGE
 from api.settings import RETRY_AFTER_SECONDS
 from common.data.publisher import TaskPublisher
 from common.log import configure_logging
@@ -24,7 +25,6 @@ from common.log import configure_logging
 log = structlog.get_logger()
 
 INTERNAL_SERVER_ERROR_MESSAGE = "Internal server error."
-DATABASE_UNAVAILABLE_MESSAGE = "The service is temporarily unavailable. Try again later."
 
 
 @asynccontextmanager
@@ -106,7 +106,7 @@ async def render_database_unavailable(request: Request, exc: DatabaseUnavailable
     return await render_error(
         request,
         HTTPException(
-            503, DATABASE_UNAVAILABLE_MESSAGE, headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
+            503, SERVICE_UNAVAILABLE_MESSAGE, headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
         ),
     )
 
