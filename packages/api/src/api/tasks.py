@@ -76,19 +76,15 @@ async def _fetch_outcome(connection: AsyncConnection, task_id: uuid.UUID) -> Tas
     return None if row is None else _task_outcome.validate_python(dict(row._mapping))
 
 
-async def check_circuit_size(body: SubmitTaskRequest) -> SubmitTaskRequest:
+async def validate_task(body: SubmitTaskRequest) -> SubmitTaskRequest:
     if len(body.quantum_circuit.encode("utf-8")) > MAX_CIRCUIT_BYTES:
         raise HTTPException(413, f"Circuit is larger than the limit of {MAX_CIRCUIT_BYTES} bytes.")
     return body
 
 
-# The route takes its body from the check rather than listing the check in `dependencies`:
-# declaring the body in both places makes FastAPI validate it twice and report each error
-# twice. Dependencies resolve in signature order, so an oversized circuit is refused before
-# a database connection is opened.
 @router.post("", status_code=202)
 async def submit_task(
-    body: Annotated[SubmitTaskRequest, Depends(check_circuit_size)],
+    body: Annotated[SubmitTaskRequest, Depends(validate_task)],
     connection: DbConnectionDep,
     publisher: PublisherDep,
 ) -> SubmitTaskResponse:

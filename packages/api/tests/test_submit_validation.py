@@ -5,8 +5,6 @@ from fastapi.testclient import TestClient
 
 from api.tasks import MAX_CIRCUIT_BYTES
 
-TWO_BYTE_CHARACTER = b"\xc3\xa9".decode("utf-8")
-
 
 def test_missing_qc_returns_400(client: TestClient) -> None:
     response = client.post("/tasks", json={})
@@ -74,7 +72,8 @@ def test_circuit_over_the_size_limit_returns_413_and_is_not_stored(
 
 
 def test_circuit_size_is_measured_in_utf8_bytes(client: TestClient) -> None:
-    oversized_circuit = TWO_BYTE_CHARACTER * (MAX_CIRCUIT_BYTES // 2 + 1)
+    two_byte_character = b"\xc3\xa9".decode("utf-8")
+    oversized_circuit = two_byte_character * (MAX_CIRCUIT_BYTES // 2 + 1)
 
     response = client.post("/tasks", json={"qc": oversized_circuit})
 
