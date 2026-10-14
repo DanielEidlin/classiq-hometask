@@ -48,7 +48,6 @@ def simulate(circuit_text: str, shots: int, max_memory_mb: int) -> SimulationOut
         result = simulator.run(transpile(circuit, simulator), shots=shots).result()
         if not result.success:
             return _rejection(result)
-        # Aer runs a circuit without measurements successfully; reading its counts raises.
         counts: dict[str, int] = result.get_counts()
     except Exception as exc:
         return SimulationFailed(
