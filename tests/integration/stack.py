@@ -75,6 +75,14 @@ class ComposeStack:
         compose("restart", service)
         self._wait_until_healthy(service)
 
+    def recreate(self, service: str) -> None:
+        """Replace the service's containers with new ones, as `docker compose down` and `up`
+        or a changed setting would, keeping its volumes."""
+        compose(
+            "up", "--detach", "--wait", "--wait-timeout", WAIT_TIMEOUT_SECONDS,
+            "--force-recreate", "--no-deps", service,
+        )
+
     def _wait_until_healthy(self, service: str) -> None:
         compose("up", "--detach", "--wait", "--wait-timeout", WAIT_TIMEOUT_SECONDS, "--no-deps", service)
 

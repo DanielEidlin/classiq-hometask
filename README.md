@@ -2,6 +2,253 @@
 
 A service that accepts quantum circuits over HTTP, simulates them asynchronously, and returns the measurement counts.
 
+- [Setup](#setup)
+- [Usage](#usage)
+- [Architecture](#architecture)
+- [Configuration](#configuration)
+- [Testing](#testing)
+- [Design decisions](#design-decisions)
+- [Future work](#future-work)
+
+## Setup
+
+**Prerequisites**
+
+- Docker with Docker Compose v2.
+- About 5 GB of memory for Docker: each of the two worker containers is limited to 2 GB (decision 12).
+- For the tests only: [`uv`](https://docs.astral.sh/uv/) 0.13 or later, which installs Python 3.12 itself.
+
+**Run the system**
+
+```sh
+docker compose up --build --detach --wait
+```
+
+This builds the images, starts Postgres and RabbitMQ, runs the database migrations, then starts the API, two workers and the sweeper. `--wait` returns once every health check passes. The API listens on <http://localhost:8000>.
+
+Other useful commands:
+
+```sh
+docker compose logs --follow api worker sweeper   # follow the logs
+docker compose up --detach --scale worker=4       # run more workers
+docker compose down                               # stop and remove the containers; keeps the data volumes
+docker compose down --volumes                     # stop and delete all data
+```
+
+## Usage
+
+Interactive API docs, generated from the code, are served at <http://localhost:8000/docs>.
+
+**Submit a circuit.** The body is `{"qc": "<OpenQASM 3 text>"}`:
+
+```sh
+curl -s -X POST http://localhost:8000/tasks \
+  -H 'Content-Type: application/json' \
+  -d '{"qc": "OPENQASM 3.0; include \"stdgates.inc\"; qubit[2] q; bit[2] c; h q[0]; cx q[0], q[1]; c = measure q;"}'
+```
+
+```json
+{"task_id": "3f6c1a2e-8f0b-4d7e-9a51-2c4b7e0d9f13", "message": "Task submitted successfully."}
+```
+
+**Poll for the result** with the returned `task_id`:
+
+```sh
+curl -s http://localhost:8000/tasks/3f6c1a2e-8f0b-4d7e-9a51-2c4b7e0d9f13
+```
+
+```json
+{"status": "completed", "result": {"00": 518, "11": 506}}
+```
+
+Counts always sum to the worker's shot count (1024 by default). Poll until `status` is no longer `pending`; a task normally finishes within seconds.
+
+### Responses
+
+`POST /tasks`
+
+| HTTP | Body | When |
+|---|---|---|
+| 202 | `{"task_id": "<uuid>", "message": "Task submitted successfully."}` | The task is accepted: stored and published |
+| 400 | `{"status": "error", "message": "body.qc: Field required"}` | The body isn't JSON, or `qc` is missing, not a string or empty; the message names the problem |
+| 413 | `{"status": "error", "message": "Circuit is larger than the limit of 65536 bytes."}` | The circuit exceeds `MAX_CIRCUIT_BYTES` |
+| 503 | `{"status": "error", "message": "The service is busy. Submit the task again later."}` | The queue is full or RabbitMQ is unavailable; the `Retry-After` header says when to retry, and the task was not accepted |
+
+`GET /tasks/{task_id}`
+
+| HTTP | Body | When |
+|---|---|---|
+| 200 | `{"status": "pending", "message": "Task is still in progress."}` | Not finished yet |
+| 200 | `{"status": "completed", "result": {"00": 518, "11": 506}}` | Simulated; `result` maps each measured bitstring to its count |
+| 200 | `{"status": "error", "message": "<reason>"}` | The task failed; see below |
+| 404 | `{"status": "error", "message": "Task not found."}` | No task has this ID (including IDs that aren't UUIDs) |
+
+A failed task's `message` explains why. Examples:
+
+| Cause | Example message |
+|---|---|
+| Not valid QASM3 | `Invalid QASM3: ...` with the parser's message |
+| Too large for the worker's memory budget | Aer's message: `Insufficient memory ... Required memory: 2048M, max memory: 1700M` |
+| No measurements, or another simulator error | The error's type and message, e.g. `QiskitError: No counts for experiment ...` |
+| Ran past the time limit | `Simulation exceeded the time limit of 60 seconds.` |
+| Killed by the operating system | `Simulation was killed by the operating system (signal 9). The usual cause is exceeding the worker's memory limit.` |
+| Its worker crashed on every attempt | `The worker running the task was lost 3 times, so it was not run again.` |
+
+`GET /health`
+
+| HTTP | Body | When |
+|---|---|---|
+| 200 | `{"status": "ok"}` | Postgres and RabbitMQ are reachable |
+| 503 | `{"status": "error", "message": "Postgres is unreachable."}` (or `RabbitMQ`) | A dependency is down |
+
+Any unexpected server error returns 500 with `{"status": "error", "message": "Internal server error."}`.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    client([Client])
+    api["API<br/>FastAPI, async"]
+    pg[("Postgres<br/>tasks table")]
+    mq[["RabbitMQ<br/>queue: tasks"]]
+    worker["Worker × 2<br/>Celery + Qiskit Aer"]
+    sweeper["Sweeper"]
+    migrate["migrate<br/>one-shot Alembic"]
+
+    client -- "POST /tasks<br/>GET /tasks/{id}" --> api
+    api -- "store task, read outcome" --> pg
+    api -- "publish task ID" --> mq
+    mq -- "deliver task ID" --> worker
+    worker -- "claim task, record outcome" --> pg
+    sweeper -- "find unpublished tasks" --> pg
+    sweeper -- "republish" --> mq
+    migrate -. "create schema at startup" .-> pg
+```
+
+| Service | Role |
+|---|---|
+| `api` | Validates requests, stores tasks, publishes them, and serves their outcomes. Only does I/O. |
+| `worker` | Consumes the queue with Celery, one simulation at a time per container, and records each outcome. Does all CPU-heavy work: parsing and simulating. |
+| `sweeper` | Publishes tasks the API stored but never published (it crashed in between), and warns about tasks pending too long. |
+| `postgres` | The source of truth for every task: its circuit, state, outcome and attempt count. |
+| `rabbitmq` | Delivers task IDs to workers and bounds the backlog. |
+| `migrate` | Applies the database migrations, then exits; the other services start only after it succeeds. |
+
+### The path of a task
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant A as API
+    participant P as Postgres
+    participant Q as RabbitMQ
+    participant W as Worker
+    participant S as Simulation<br/>(child process)
+
+    C->>A: POST /tasks {"qc": ...}
+    A->>P: insert task (pending, unpublished)
+    A->>Q: publish task ID
+    Q-->>A: confirm (message stored)
+    A->>P: mark published
+    A-->>C: 202 {"task_id": ...}
+
+    Q->>W: deliver task ID
+    W->>P: if pending: count an attempt, fetch the circuit
+    W->>S: parse and simulate, with a time limit
+    S-->>W: counts, or a classified failure
+    W->>P: if still pending: record completed or failed
+    W->>Q: acknowledge
+
+    C->>A: GET /tasks/{id}
+    A->>P: read status and outcome
+    A-->>C: 200 {"status": ...}
+```
+
+What happens when something goes wrong along this path:
+
+- **RabbitMQ rejects or doesn't confirm the publish (steps 3–4):** the API deletes the row and answers 503 (decision 11).
+- **The API crashes between storing and marking published (steps 2–5):** the sweeper publishes the task after a grace period (decision 14).
+- **The worker dies mid-task:** the message was never acknowledged, so RabbitMQ redelivers it. Each delivery counts an attempt; past `MAX_ATTEMPTS` the task fails with `WORKER_LOST` (decision 5).
+- **The task is delivered twice:** both writes are conditional on the task being `pending`, so the first outcome recorded wins (decision 10).
+- **Postgres is down when recording the outcome:** the worker retries in place, then returns the message to the queue (decision 18).
+
+### Repository layout
+
+A `uv` workspace with one package per service (decision 8):
+
+| Path | Contents |
+|---|---|
+| `packages/common` | The contracts shared by every service: the `tasks` table, status and error-code enums, the task message and queue, the publisher, logging setup, and the Alembic migrations |
+| `packages/api` | The FastAPI service |
+| `packages/worker` | The Celery worker: task handler, supervised simulation runner, database retries |
+| `packages/sweeper` | The sweeper loop and its health check |
+| `tests/integration` | Black-box tests against the full Compose stack |
+
+## Configuration
+
+Every setting is an environment variable with a default. To change one passed through by `compose.yaml` (all but `DATABASE_URL`, `RABBITMQ_URL` and `SWEEPER_HEARTBEAT_FILE`), set it in the shell or in a `.env` file next to `compose.yaml`, which Docker Compose reads automatically, then run `docker compose up --detach` again:
+
+```sh
+TASK_TIMEOUT_SECONDS=120 WORKER_STOP_GRACE_PERIOD=135s docker compose up --detach --wait
+```
+
+| Variable | Default | Service | Purpose |
+|---|---|---|---|
+| `API_PORT` | `8000` | Compose | Host port the API is published on |
+| `LOG_FORMAT` | `json` | all | `json` for structured logs, `console` for human-readable ones |
+| `DATABASE_URL` | set by Compose | all | Postgres connection URL (SQLAlchemy, `psycopg` driver) |
+| `RABBITMQ_URL` | set by Compose | all | RabbitMQ connection URL |
+| `MAX_QUEUED_TASKS` | `10000` | api, worker, sweeper | Cap on messages waiting in the task queue; publishes beyond it are rejected and the API answers 503 |
+| `PUBLISH_TIMEOUT_SECONDS` | `5` | api, sweeper | How long to wait for RabbitMQ to confirm a publish before treating it as failed |
+| `MAX_CIRCUIT_BYTES` | `65536` | api | Largest accepted circuit, in UTF-8 bytes; larger ones get 413 |
+| `RETRY_AFTER_SECONDS` | `5` | api | Value of the `Retry-After` header on a 503 |
+| `SHOTS` | `1024` | worker | Shots per simulation |
+| `TASK_TIMEOUT_SECONDS` | `60` | worker | Time limit per simulation; past it the task fails with `TIMEOUT` |
+| `AER_MAX_MEMORY_MB` | `1700` | worker | Memory budget given to Aer; larger circuits fail with `CIRCUIT_TOO_LARGE` |
+| `MAX_ATTEMPTS` | `3` | worker | Deliveries of a task before it fails with `WORKER_LOST` |
+| `WORKER_CONCURRENCY` | `1` | worker | Simulations at once per worker container (decision 12 explains why 1) |
+| `DB_TIMEOUT_SECONDS` | `10` | worker | Timeout of every database call, so none can hang |
+| `DB_RETRY_FIRST_DELAY_SECONDS` | `1` | worker | First wait when retrying a call while Postgres is unreachable; doubles each time |
+| `DB_RETRY_MAX_DELAY_SECONDS` | `30` | worker | Longest wait between those retries |
+| `DB_OUTAGE_GIVE_UP_SECONDS` | `240` | worker | How long to keep retrying before returning the message to the queue |
+| `WORKER_STOP_GRACE_PERIOD` | `75s` | Compose | How long Docker lets a stopping worker finish its task before killing it |
+| `CONSUMER_TIMEOUT_MS` | `300000` | Compose (RabbitMQ) | How long a worker may hold a message unacknowledged before RabbitMQ requeues it |
+| `SWEEP_INTERVAL_SECONDS` | `10` | sweeper | Time between sweeper passes |
+| `SWEEP_GRACE_SECONDS` | `30` | sweeper | Age after which an unpublished task is published by the sweeper |
+| `STALE_TASK_SECONDS` | `600` | sweeper | Age after which a pending task is logged as `stale_task` |
+| `SWEEPER_HEALTHY_WITHIN_SECONDS` | `60` | sweeper | The health check fails if the last successful pass is older than this |
+| `SWEEPER_HEARTBEAT_FILE` | `/tmp/sweeper-heartbeat` | sweeper (not set by Compose) | File touched after each successful pass, read by the health check |
+
+Worker replicas, CPU and memory limits are set in `compose.yaml` (`deploy`), not by variables. Use `--scale worker=N` to change the replica count.
+
+Some settings depend on each other:
+
+- `SWEEP_GRACE_SECONDS` must exceed `PUBLISH_TIMEOUT_SECONDS`, so the sweeper never republishes a task whose request is still publishing it.
+- `WORKER_STOP_GRACE_PERIOD` must exceed `TASK_TIMEOUT_SECONDS` plus about 15 s, so a stopping worker can finish its task.
+- `CONSUMER_TIMEOUT_MS` should exceed `TASK_TIMEOUT_SECONDS` plus `DB_OUTAGE_GIVE_UP_SECONDS`, so a worker returns a message itself before RabbitMQ takes it back.
+- `AER_MAX_MEMORY_MB` should stay about 300 MB below the worker's memory limit.
+- `MAX_QUEUED_TASKS` is fixed when the queue is first declared, and RabbitMQ refuses to redeclare a queue with different arguments. To change it, delete the queue first, for example with `docker compose down --volumes`.
+
+## Testing
+
+Install the dependencies once:
+
+```sh
+uv sync --locked --all-packages
+```
+
+| What | Command | Needs |
+|---|---|---|
+| Type check | `uv run mypy` | — |
+| Unit tests | `uv run pytest -m "not integration"` | Docker running: the worker and sweeper tests start a throwaway Postgres container with testcontainers |
+| Integration tests | `uv run pytest -m integration` | Docker; takes several minutes |
+| One file | `uv run pytest tests/integration/test_core_flow.py` | Whatever its tests need |
+
+The integration tests build the images and start the whole stack as a separate Compose project, `classiq-hometask-test`, with the API on port 18000 and Postgres on 15432 (override with `TEST_API_PORT` and `TEST_POSTGRES_PORT`). They don't touch a stack started with `docker compose up`, and they remove their own stack and its volumes when they finish. Tests that stop or restart services are marked `resilience` and run last. Two integration runs at the same time on one machine collide, because they share the project name and ports.
+
+CI runs the type check and unit tests in one job and the integration tests in another, on every push and pull request (`.github/workflows/ci.yml`). Decision 13 describes what each layer covers.
+
 ## Design decisions
 
 ### 1. Delivery guarantee: at-least-once
@@ -81,7 +328,7 @@ A sweeper service republishes any task still unpublished after a grace period, w
 |---|---|---|---|
 | Circuit fails validation | Invalid QASM3 | `failed`, no retry | `INVALID_CIRCUIT` |
 | Circuit needs more memory than the worker's budget | 27-qubit statevector on a 1.7 GB budget | `failed`, no retry; the simulator's own message is returned | `CIRCUIT_TOO_LARGE` |
-| Circuit raises during simulation | Aer error, no measurements so no counts | `failed`, no retry; the simulator's own message is returned | `SIMULATION_ERROR` |
+| Circuit raises during simulation, or the simulation process exits unexpectedly | Aer error, no measurements so no counts | `failed`, no retry; the simulator's own message is returned | `SIMULATION_ERROR` |
 | Circuit exceeds time limit | Non-terminating loop | `failed`, no retry | `TIMEOUT` |
 | Simulation killed by the OS | Memory use exceeds the container limit despite the simulator's own check | `failed`, no retry | `KILLED` |
 | Database unreachable | Postgres down while saving | Retried in place, then the message is returned to the queue (decision 18) | (none; the outcome cannot be recorded) |
@@ -131,7 +378,7 @@ Worker loss is covered by Celery's `acks_late` and `task_reject_on_worker_lost`:
 - `worker`: the Celery worker.
 - `sweeper`: the service that republishes unpublished tasks (decision 14).
 
-Each service has its own dependencies and Dockerfile. The schema is managed with Alembic migrations, run by a one-shot `migrate` service in Docker Compose; the API and worker start only after it completes successfully.
+Each service has its own dependencies and Dockerfile. The schema is managed with Alembic migrations, run by a one-shot `migrate` service in Docker Compose; the API, worker and sweeper start only after it completes successfully.
 
 **Rationale.**
 
@@ -152,7 +399,7 @@ Each service has its own dependencies and Dockerfile. The schema is managed with
 
 **Decision.** Every write by a worker applies only while the task is still `pending`:
 
-- **On start:** `UPDATE tasks SET attempts = attempts + 1 WHERE id = :id AND status = 'pending' RETURNING qc, attempts`. If no row is returned, the task is already final, and the worker acknowledges the message without simulating.
+- **On start:** `UPDATE tasks SET attempts = attempts + 1 WHERE id = :id AND status = 'pending' RETURNING circuit, attempts`. If no row is returned, the task is already final, and the worker acknowledges the message without simulating.
 - **On finish:** `UPDATE tasks SET status = :final, ... WHERE id = :id AND status = 'pending'`. The first writer wins; a later writer updates no rows, logs that it discarded a duplicate result, and acknowledges.
 
 Once a task reaches a final state, it never changes.
@@ -186,7 +433,7 @@ Once a task reaches a final state, it never changes.
 | Worker replicas | 2 | Parallel simulation slots |
 | CPU limit per container | 2 | All available to the single running simulation |
 | Memory limit per container | 2 GB | Container budget |
-| Aer `max_memory_mb` | 1700 | Simulator budget: container limit minus ~300 MB for Python, Qiskit and Celery. Allows up to 26 qubits with the statevector method |
+| Aer `max_memory_mb` (`AER_MAX_MEMORY_MB`) | 1700 | Simulator budget: container limit minus ~300 MB for Python, Qiskit and Celery. Allows up to 26 qubits with the statevector method |
 | `TASK_TIMEOUT_SECONDS` | 60 | Hard limit per simulation |
 
 All values are configurable through environment variables and the Compose file.
@@ -204,15 +451,16 @@ All values are configurable through environment variables and the Compose file.
 
 **Decision.** Three layers, all run in CI (GitHub Actions) on every push:
 
-- **Unit tests** for logic that is intricate in isolation: the Celery message encoder and failure classification.
-- **Duplicate-handling tests** against a real Postgres: the worker's task handler runs a task twice, overlapping, and the second result must be discarded.
-- **Integration tests**, black-box over HTTP against the full Compose stack, which a pytest fixture starts with `docker compose up --wait` (blocking until every health check passes). A test override file shortens limits so slow cases run quickly (a 15 s timeout, a small queue cap).
+- **Unit tests** for logic that is intricate in isolation: the Celery message encoder, the publisher's failure handling, request validation and load shedding (with the database and broker mocked), failure classification, the database retry policy, and the sweeper's loop and health check. The simulation runner's tests simulate real circuits with Aer, covering counts, invalid QASM3, no measurements, too large for the memory budget, a timeout and an unexpected simulator error.
+- **Tests against a real Postgres**, in a throwaway container started by testcontainers. The worker's task handler: a task run twice keeps the first result, the attempt cap, and retrying and giving up while the database is unreachable. The sweeper: the grace period, two sweepers at once publishing each task once, a rejected publish, and stale-task warnings.
+- **Integration tests**, black-box over HTTP against the full Compose stack, which a pytest fixture starts with `docker compose up --wait` (blocking until every health check passes). A test override file shortens the worker's time limit to 15 s, so the slow cases run quickly, and publishes Postgres's port, so tests can inspect and arrange task rows. The queue-full test lowers the queue cap with a temporary RabbitMQ policy.
 
 | Group | Tests |
 |---|---|
-| Core flow | Submit a Bell circuit and receive `completed` with counts summing to 1024 over keys `00` and `11`; `pending` is observed first; an unknown ID returns 404 |
-| Validation and failures | Invalid QASM3, no measurements, too large for the memory budget, a non-terminating loop (timeout), and an oversized body (413) |
-| Resilience | A worker is killed mid-task and the task still completes; RabbitMQ restarts while tasks are queued (workers stopped), then workers start and every task completes, and a task submitted after the restart is accepted (the API reconnected on its own); a full queue returns 503 with `Retry-After`, and the accepted tasks complete once workers resume |
+| Core flow | Submit a Bell circuit and receive `completed` with counts summing to 1024 over keys `00` and `11`; `pending` is observed first; an unknown ID returns 404; a malformed body returns 400; an oversized body returns 413; `/health` returns 200 |
+| Failures | Invalid QASM3 reports the parser's message; a non-terminating loop reports a timeout |
+| Backpressure and sweeper | The queue is declared with its cap and `reject-publish`; a full queue returns 503 with `Retry-After`, and the accepted tasks complete once workers resume; a task stored but never published still completes |
+| Resilience | Workers are killed mid-task and the task runs again after they restart; RabbitMQ restarts while tasks are queued (workers stopped), then workers start and every task completes, and a task submitted after the restart is accepted (the API reconnected on its own); tasks queued when the RabbitMQ container is replaced complete, because its fixed hostname keeps the data volume's messages; workers stopped mid-task finish it before exiting, without a redelivery; the API and sweeper exit cleanly on SIGTERM; RabbitMQ's consumer timeout is 5 minutes |
 
 **Rationale.**
 
@@ -277,8 +525,9 @@ All values are configurable through environment variables and the Compose file.
 | Case | HTTP |
 |---|---|
 | Malformed body (not JSON, missing, non-string or empty `qc`) | 400 |
-| Unknown task ID | 404 |
+| Unknown task ID, or one that isn't a UUID | 404 |
 | Circuit larger than `MAX_CIRCUIT_BYTES` | 413 |
+| Unexpected server error | 500 |
 | Queue full or broker unavailable | 503, with `Retry-After` |
 
 **Rationale.**
@@ -290,7 +539,7 @@ All values are configurable through environment variables and the Compose file.
 
 **Decision.** A task can only be stuck if its message is gone or held indefinitely while its row is still `pending`. Worker death is already covered by redelivery (decision 5); three further paths are handled:
 
-1. **Database unreachable when recording an outcome.** The worker retries the write in place with exponential backoff (capped at 30 s between tries), holding its one message and taking no new tasks. If the database is still unreachable after `DB_OUTAGE_GIVE_UP_SECONDS` (240 s), it returns the message to the queue unacknowledged (Celery's `Reject(requeue=True)`) for a later attempt. Every failed write is logged as an error with the task ID.
+1. **Database unreachable when recording an outcome.** The worker retries the write in place with exponential backoff (capped at 30 s between tries), holding its one message and taking no new tasks. If the database is still unreachable after `DB_OUTAGE_GIVE_UP_SECONDS` (240 s), it returns the message to the queue unacknowledged (Celery's `Reject(requeue=True)`) for a later attempt. Every failed write is logged as an error with the task ID. The returned message has already used an attempt, so a task whose outcome can't be recorded through `MAX_ATTEMPTS` consecutive outages fails with `WORKER_LOST`.
 2. **A worker alive but stuck** (for example, blocked on a call that never returns). RabbitMQ's `consumer_timeout` is set to 5 minutes, so a delivery held longer than that is returned to the queue. The worker's database calls have their own timeouts.
 3. **A message lost despite durable, persistent, confirmed publishing** (disk failure, a purged queue, misconfiguration). The sweeper logs a `stale_task` warning for any task `pending` longer than `STALE_TASK_SECONDS` (600 s). It does not republish them.
 
@@ -307,3 +556,4 @@ All values are configurable through environment variables and the Compose file.
 - **Retention policy:** delete or archive tasks older than a configurable age, bounding table growth. Partition the table by creation date if volumes grow further.
 - **Per-task locking:** add a distributed lock to reduce duplicate simulations if they become a measurable cost, keeping the conditional writes as the correctness guarantee (decision 10).
 - **Claim-check storage:** move circuits to an object store if the size limit is ever raised into the megabytes.
+- **Centralised logs in Elasticsearch:** ship every service's JSON logs to Elasticsearch (for example with Filebeat or Fluent Bit reading the container output) and search them in Kibana. The logs are already structured with a `task_id` on every task-related line (decision 16), so one query would follow a task through the API, the worker and the sweeper, and the `stale_task` and `database_unavailable` events could drive alerts. Today the logs are read with `docker compose logs`, which keeps them only as long as the containers exist.
