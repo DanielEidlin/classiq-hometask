@@ -16,6 +16,7 @@ from sweeper.settings import (
     SWEEP_INTERVAL_SECONDS,
     SWEEPER_HEARTBEAT_FILE,
 )
+from sweeper.store import PostgresTaskStore
 from sweeper.sweeper import Sweeper
 
 log = structlog.get_logger()
@@ -32,7 +33,9 @@ async def run() -> None:
 
     engine = create_async_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
     publisher = await TaskPublisher.connect(os.environ["RABBITMQ_URL"])
-    sweeper = Sweeper(engine, publisher, grace=SWEEP_GRACE, stale_after=STALE_TASK_AFTER)
+    sweeper = Sweeper(
+        PostgresTaskStore(engine), publisher, grace=SWEEP_GRACE, stale_after=STALE_TASK_AFTER
+    )
     try:
         await sweep_until_stopped(
             sweeper, stop_event, SWEEP_INTERVAL_SECONDS, SWEEPER_HEARTBEAT_FILE
