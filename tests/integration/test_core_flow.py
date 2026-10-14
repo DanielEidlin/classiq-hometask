@@ -77,7 +77,7 @@ def test_malformed_body_returns_400(api: httpx.Client) -> None:
     response = api.post("/tasks", json={"circuit": BELL_CIRCUIT})
 
     assert response.status_code == 400
-    assert response.json() == {"status": "error", "message": "Field 'qc' is required."}
+    assert response.json() == {"status": "error", "message": "body.qc: Field required"}
 
 
 def test_oversized_circuit_returns_413(api: httpx.Client) -> None:
