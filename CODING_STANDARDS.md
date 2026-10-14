@@ -13,6 +13,7 @@ Conventions for code in this repository, drawn from review. Tooling already enfo
 
 - No nested functions. Write a private module-level function (`_name`) and bind arguments with `functools.partial` where needed.
 - One module per FastAPI router (`api/tasks.py`, `api/health.py`). `api/main.py` only builds the app, registers routers and installs error handling.
+- The API's Pydantic models (request and response bodies, stored outcomes) live in `api/models.py`; router modules hold only routes and the code they call.
 - Each database statement lives in its own small function named after what it does (`_claim`, `_complete`, `_fetch_outcome`), returning a typed result. Write the query out in full inside it; pass several conditions to `.where(...)` rather than building `sa.and_(...)` in a separate variable.
 
 ## Dependencies and state
