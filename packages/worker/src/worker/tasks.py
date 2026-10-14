@@ -4,9 +4,11 @@ import functools
 import os
 import uuid
 
+from celery.exceptions import Reject
+
 from common.task_queue import PROCESS_TASK_NAME
 from worker.app import app
-from worker.handler import TaskHandler
+from worker.handler import RecordingAbandoned, TaskHandler
 
 
 # Built on first use: the engine's connection pool must not cross Celery's fork into its pool processes.
@@ -17,4 +19,8 @@ def _handler() -> TaskHandler:
 
 @app.task(name=PROCESS_TASK_NAME)  # type: ignore[untyped-decorator]
 def process(task_id: str) -> None:
-    _handler().handle(uuid.UUID(task_id))
+    try:
+        _handler().handle(uuid.UUID(task_id))
+    except RecordingAbandoned:
+        # Unacknowledged and requeued, so the task runs again once the database is back.
+        raise Reject("the outcome could not be recorded", requeue=True) from None

@@ -24,6 +24,11 @@ services:
 
   rabbitmq:
     image: rabbitmq:4.1-alpine
+    environment:
+      # How long a consumer may hold a delivered message unacknowledged before RabbitMQ closes
+      # its channel and requeues the message, so a stuck worker can't hold a task forever.
+      # It must exceed TASK_TIMEOUT_SECONDS plus the worker's DB_OUTAGE_GIVE_UP_SECONDS.
+      RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit consumer_timeout ${CONSUMER_TIMEOUT_MS:-300000}"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
     healthcheck:
@@ -71,6 +76,10 @@ services:
       dockerfile: packages/worker/Dockerfile
     environment:
       <<: *app-environment
+      DB_TIMEOUT_SECONDS: ${DB_TIMEOUT_SECONDS:-10}
+      DB_RETRY_FIRST_DELAY_SECONDS: ${DB_RETRY_FIRST_DELAY_SECONDS:-1}
+      DB_RETRY_MAX_DELAY_SECONDS: ${DB_RETRY_MAX_DELAY_SECONDS:-30}
+      DB_OUTAGE_GIVE_UP_SECONDS: ${DB_OUTAGE_GIVE_UP_SECONDS:-240}
       SHOTS: ${SHOTS:-1024}
       WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
       TASK_TIMEOUT_SECONDS: ${TASK_TIMEOUT_SECONDS:-60}
