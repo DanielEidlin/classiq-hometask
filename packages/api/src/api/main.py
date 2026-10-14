@@ -13,6 +13,7 @@ from starlette.exceptions import HTTPException
 
 from api import health, tasks
 from api.dependencies import AppState
+from api.store import PostgresTaskStore
 from common.log import configure_logging
 from common.publisher import TaskPublisher
 
@@ -27,7 +28,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[AppState]:
     configure_logging("api")
     engine = create_async_engine(os.environ["DATABASE_URL"], pool_pre_ping=True)
     publisher = await TaskPublisher.connect(os.environ["RABBITMQ_URL"])
-    yield {"engine": engine, "publisher": publisher}
+    yield {"task_store": PostgresTaskStore(engine), "publisher": publisher}
     await publisher.close()
     await engine.dispose()
 
