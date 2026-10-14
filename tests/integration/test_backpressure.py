@@ -25,7 +25,7 @@ def test_submissions_beyond_the_queue_cap_get_503_and_accepted_tasks_complete(
     accepted = [response for response in responses if response.status_code == 202]
     rejected = [response for response in responses if response.status_code != 202]
     # At most the cap: tasks left in the queue by earlier tests would take some of the room.
-    assert len(accepted) <= MAX_QUEUED_TASKS
+    assert 0 < len(accepted) <= MAX_QUEUED_TASKS
     assert len(rejected) >= SUBMISSIONS_OVER_THE_CAP
     for response in rejected:
         assert response.status_code == 503

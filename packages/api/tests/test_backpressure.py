@@ -21,7 +21,7 @@ def test_failed_publish_returns_503_with_retry_after(
     assert response.headers["retry-after"] == str(RETRY_AFTER_SECONDS)
     assert response.json() == {
         "status": "error",
-        "message": "The service is busy. Retry the task later.",
+        "message": "The service is busy. Submit the task again later.",
     }
 
 

@@ -5,6 +5,7 @@ x-app-environment: &app-environment
   # Every service that declares the task queue must use the same cap (RabbitMQ refuses a
   # redeclaration with different arguments), so it is set once here.
   MAX_QUEUED_TASKS: ${MAX_QUEUED_TASKS:-10000}
+  PUBLISH_TIMEOUT_SECONDS: ${PUBLISH_TIMEOUT_SECONDS:-5}
 
 services:
   postgres:
@@ -48,7 +49,6 @@ services:
     environment:
       <<: *app-environment
       MAX_CIRCUIT_BYTES: ${MAX_CIRCUIT_BYTES:-65536}
-      PUBLISH_TIMEOUT_SECONDS: ${PUBLISH_TIMEOUT_SECONDS:-5}
       RETRY_AFTER_SECONDS: ${RETRY_AFTER_SECONDS:-5}
     ports:
       - "${API_PORT:-8000}:8000"

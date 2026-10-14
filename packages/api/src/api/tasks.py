@@ -107,7 +107,7 @@ async def submit_task(
         await _delete_task(connection, task_id)
         raise HTTPException(
             503,
-            "The service is busy. Retry the task later.",
+            "The service is busy. Submit the task again later.",
             headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
         ) from None
     async with connection.begin():
