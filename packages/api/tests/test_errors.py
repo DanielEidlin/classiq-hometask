@@ -8,7 +8,7 @@ from fakes.api_task_store import BrokenTaskStore
 
 
 def test_unexpected_error_returns_500_in_the_error_shape(client: TestClient) -> None:
-    app.dependency_overrides[get_task_store] = BrokenTaskStore
+    app.dependency_overrides[get_task_store] = lambda: BrokenTaskStore()
 
     response = client.get(f"/tasks/{uuid.uuid4()}")
 

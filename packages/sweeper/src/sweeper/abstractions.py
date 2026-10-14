@@ -23,6 +23,8 @@ class UnpublishedBatch(Protocol):
 
 
 class TaskStore(Protocol):
+    """The sweeper's reads and writes of tasks."""
+
     def lock_unpublished(self, grace: timedelta) -> AbstractAsyncContextManager[UnpublishedBatch]:
         """Lock the tasks unpublished for longer than `grace`, skipping any another sweeper
         holds. The locks, and the marks made through the batch, last until the block exits."""

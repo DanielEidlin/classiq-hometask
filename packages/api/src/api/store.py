@@ -64,6 +64,6 @@ class PostgresTaskStore:
             async with self._engine.connect() as connection:
                 await connection.execute(sa.text("SELECT 1"))
         except Exception:
-            log.warning("health_check_failed", dependency="postgres", exc_info=True)
+            log.warning("database_unreachable", exc_info=True)
             return False
         return True

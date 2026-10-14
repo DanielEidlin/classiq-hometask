@@ -33,10 +33,15 @@ class FakeTaskStore:
         self._unpublished = unpublished or []
         self._stale = stale or []
         self.marked_published: list[uuid.UUID] = []
+        self.batch_open = False
 
     @asynccontextmanager
     async def lock_unpublished(self, grace: timedelta) -> AsyncIterator[FakeUnpublishedBatch]:
-        yield FakeUnpublishedBatch(self._unpublished, self.marked_published)
+        self.batch_open = True
+        try:
+            yield FakeUnpublishedBatch(self._unpublished, self.marked_published)
+        finally:
+            self.batch_open = False
 
     async def find_stale(self, stale_after: timedelta) -> list[StaleTask]:
         return self._stale

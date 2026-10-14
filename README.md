@@ -119,7 +119,7 @@ flowchart LR
     api -- "store task, read outcome" --> pg
     api -- "publish task ID" --> mq
     mq -- "deliver task ID" --> worker
-    worker -- "claim task, record outcome" --> pg
+    worker -- "start an attempt, record the outcome" --> pg
     sweeper -- "find unpublished tasks" --> pg
     sweeper -- "republish" --> mq
     migrate -. "create schema at startup" .-> pg

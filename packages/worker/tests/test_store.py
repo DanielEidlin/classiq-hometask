@@ -13,7 +13,7 @@ from common.tasks import ErrorCode, TaskStatus, tasks
 from fakes.database_outage import DatabaseOutage
 from worker.abstractions import DatabaseUnavailable, StartedAttempt
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
-from worker.store import PostgresTaskStore, create_db_engine, retry_while_unavailable
+from worker.store import PostgresTaskStore, create_database_engine, retry_while_unavailable
 
 CIRCUIT = "OPENQASM 3.0;"
 FIRST_COUNTS = {"00": 1024}
@@ -270,7 +270,7 @@ def test_other_database_errors_are_not_retried() -> None:
 
 
 def test_database_calls_time_out_instead_of_hanging(db_engine: sa.Engine) -> None:
-    engine = create_db_engine(db_engine.url.render_as_string(hide_password=False), DB_TIMEOUT_SECONDS)
+    engine = create_database_engine(db_engine.url.render_as_string(hide_password=False), DB_TIMEOUT_SECONDS)
     try:
         with pytest.raises(sa.exc.OperationalError), engine.connect() as connection:
             connection.execute(sa.select(sa.func.pg_sleep(QUERY_SECONDS)))

@@ -70,3 +70,23 @@ async def test_stale_task_is_logged_and_not_republished(publisher: AsyncMock) ->
         "log_level": "warning",
     } in logs
     publisher.publish.assert_not_awaited()
+
+
+async def test_tasks_are_published_while_their_batch_still_holds_them(publisher: AsyncMock) -> None:
+    """The batch's locks keep other sweepers off these tasks only while it is open."""
+    store = FakeTaskStore(unpublished=[uuid.uuid4(), uuid.uuid4()])
+    batch_open_at_each_publish: list[bool] = []
+    publisher.publish.side_effect = functools.partial(
+        _record_batch_open, store, batch_open_at_each_publish
+    )
+
+    await _build_sweeper(store, publisher).sweep()
+
+    assert batch_open_at_each_publish == [True, True]
+    assert not store.batch_open
+
+
+async def _record_batch_open(
+    store: FakeTaskStore, batch_open_at_each_publish: list[bool], task_id: uuid.UUID
+) -> None:
+    batch_open_at_each_publish.append(store.batch_open)
