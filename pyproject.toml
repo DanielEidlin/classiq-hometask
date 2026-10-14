@@ -24,6 +24,7 @@ addopts = "--import-mode=importlib"
 pythonpath = ["tests/integration"]
 markers = [
     "integration: needs the full Docker Compose stack",
+    "resilience: stops or restarts parts of the stack; runs after the other tests",
 ]
 
 [tool.mypy]
