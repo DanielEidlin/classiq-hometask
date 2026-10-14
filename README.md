@@ -69,10 +69,10 @@ Counts always sum to the worker's shot count (1024 by default). Poll until `stat
 
 | HTTP | Body | When |
 |---|---|---|
-| 202 | `{"task_id": "<uuid>", "message": "Task submitted successfully."}` | The task is stored and queued |
+| 202 | `{"task_id": "<uuid>", "message": "Task submitted successfully."}` | The task is accepted: stored and published |
 | 400 | `{"status": "error", "message": "body.qc: Field required"}` | The body isn't JSON, or `qc` is missing, not a string or empty; the message names the problem |
 | 413 | `{"status": "error", "message": "Circuit is larger than the limit of 65536 bytes."}` | The circuit exceeds `MAX_CIRCUIT_BYTES` |
-| 503 | `{"status": "error", "message": "The service is busy. Submit the task again later."}` | The queue is full or RabbitMQ is unavailable; the `Retry-After` header says when to retry, and the task was not stored |
+| 503 | `{"status": "error", "message": "The service is busy. Submit the task again later."}` | The queue is full or RabbitMQ is unavailable; the `Retry-After` header says when to retry, and the task was not accepted |
 
 `GET /tasks/{task_id}`
 
@@ -187,7 +187,7 @@ A `uv` workspace with one package per service (decision 8):
 
 ## Configuration
 
-Every setting is an environment variable with a default. To change one, set it in the shell or in a `.env` file next to `compose.yaml`, which Docker Compose reads automatically, then run `docker compose up --detach` again:
+Every setting is an environment variable with a default. To change one passed through by `compose.yaml` (all but `DATABASE_URL`, `RABBITMQ_URL` and `SWEEPER_HEARTBEAT_FILE`), set it in the shell or in a `.env` file next to `compose.yaml`, which Docker Compose reads automatically, then run `docker compose up --detach` again:
 
 ```sh
 TASK_TIMEOUT_SECONDS=120 WORKER_STOP_GRACE_PERIOD=135s docker compose up --detach --wait
@@ -199,7 +199,7 @@ TASK_TIMEOUT_SECONDS=120 WORKER_STOP_GRACE_PERIOD=135s docker compose up --detac
 | `LOG_FORMAT` | `json` | all | `json` for structured logs, `console` for human-readable ones |
 | `DATABASE_URL` | set by Compose | all | Postgres connection URL (SQLAlchemy, `psycopg` driver) |
 | `RABBITMQ_URL` | set by Compose | all | RabbitMQ connection URL |
-| `MAX_QUEUED_TASKS` | `10000` | api, worker, sweeper | Cap on queued messages; publishes beyond it are rejected and the API answers 503 |
+| `MAX_QUEUED_TASKS` | `10000` | api, worker, sweeper | Cap on messages waiting in the task queue; publishes beyond it are rejected and the API answers 503 |
 | `PUBLISH_TIMEOUT_SECONDS` | `5` | api, sweeper | How long to wait for RabbitMQ to confirm a publish before treating it as failed |
 | `MAX_CIRCUIT_BYTES` | `65536` | api | Largest accepted circuit, in UTF-8 bytes; larger ones get 413 |
 | `RETRY_AFTER_SECONDS` | `5` | api | Value of the `Retry-After` header on a 503 |
@@ -218,7 +218,7 @@ TASK_TIMEOUT_SECONDS=120 WORKER_STOP_GRACE_PERIOD=135s docker compose up --detac
 | `SWEEP_GRACE_SECONDS` | `30` | sweeper | Age after which an unpublished task is published by the sweeper |
 | `STALE_TASK_SECONDS` | `600` | sweeper | Age after which a pending task is logged as `stale_task` |
 | `SWEEPER_HEALTHY_WITHIN_SECONDS` | `60` | sweeper | The health check fails if the last successful pass is older than this |
-| `SWEEPER_HEARTBEAT_FILE` | `/tmp/sweeper-heartbeat` | sweeper | File touched after each successful pass, read by the health check |
+| `SWEEPER_HEARTBEAT_FILE` | `/tmp/sweeper-heartbeat` | sweeper (not set by Compose) | File touched after each successful pass, read by the health check |
 
 Worker replicas, CPU and memory limits are set in `compose.yaml` (`deploy`), not by variables. Use `--scale worker=N` to change the replica count.
 
@@ -328,7 +328,7 @@ A sweeper service republishes any task still unpublished after a grace period, w
 |---|---|---|---|
 | Circuit fails validation | Invalid QASM3 | `failed`, no retry | `INVALID_CIRCUIT` |
 | Circuit needs more memory than the worker's budget | 27-qubit statevector on a 1.7 GB budget | `failed`, no retry; the simulator's own message is returned | `CIRCUIT_TOO_LARGE` |
-| Circuit raises during simulation | Aer error, no measurements so no counts | `failed`, no retry; the simulator's own message is returned | `SIMULATION_ERROR` |
+| Circuit raises during simulation, or the simulation process exits unexpectedly | Aer error, no measurements so no counts | `failed`, no retry; the simulator's own message is returned | `SIMULATION_ERROR` |
 | Circuit exceeds time limit | Non-terminating loop | `failed`, no retry | `TIMEOUT` |
 | Simulation killed by the OS | Memory use exceeds the container limit despite the simulator's own check | `failed`, no retry | `KILLED` |
 | Database unreachable | Postgres down while saving | Retried in place, then the message is returned to the queue (decision 18) | (none; the outcome cannot be recorded) |
@@ -399,7 +399,7 @@ Each service has its own dependencies and Dockerfile. The schema is managed with
 
 **Decision.** Every write by a worker applies only while the task is still `pending`:
 
-- **On start:** `UPDATE tasks SET attempts = attempts + 1 WHERE id = :id AND status = 'pending' RETURNING qc, attempts`. If no row is returned, the task is already final, and the worker acknowledges the message without simulating.
+- **On start:** `UPDATE tasks SET attempts = attempts + 1 WHERE id = :id AND status = 'pending' RETURNING circuit, attempts`. If no row is returned, the task is already final, and the worker acknowledges the message without simulating.
 - **On finish:** `UPDATE tasks SET status = :final, ... WHERE id = :id AND status = 'pending'`. The first writer wins; a later writer updates no rows, logs that it discarded a duplicate result, and acknowledges.
 
 Once a task reaches a final state, it never changes.
