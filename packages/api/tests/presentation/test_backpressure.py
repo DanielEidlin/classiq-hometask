@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 from fastapi.testclient import TestClient
 
-from api.presentation.tasks import SERVICE_BUSY_MESSAGE
+from api.presentation.schemas import SERVICE_UNAVAILABLE_MESSAGE
 from api.settings import RETRY_AFTER_SECONDS
 from common.data.publisher import PublishFailed
 from tests.support.fakes.api_task_store import FakeTaskStore
@@ -20,7 +20,7 @@ def test_failed_publish_returns_503_with_retry_after(
 
     assert response.status_code == 503
     assert response.headers["retry-after"] == str(RETRY_AFTER_SECONDS)
-    assert response.json() == {"status": "error", "message": SERVICE_BUSY_MESSAGE}
+    assert response.json() == {"status": "error", "message": SERVICE_UNAVAILABLE_MESSAGE}
 
 
 def test_failed_publish_deletes_the_inserted_task(

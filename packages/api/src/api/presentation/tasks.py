@@ -9,7 +9,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from api.domain.outcomes import CompletedOutcome, FailedOutcome, PendingOutcome
 from api.presentation.dependencies import PublisherDep, TaskStoreDep
 from api.presentation.schemas import (
+    SERVICE_UNAVAILABLE_MESSAGE,
     CompletedTaskResponse,
+    ErrorResponse,
     FailedTaskResponse,
     PendingTaskResponse,
     SubmitTaskRequest,
@@ -22,7 +24,6 @@ log = structlog.get_logger()
 
 router = APIRouter(prefix="/tasks", tags=["tasks"])
 
-SERVICE_BUSY_MESSAGE = "The service is busy. Submit the task again later."
 CIRCUIT_TOO_LARGE_MESSAGE = f"Circuit is larger than the limit of {MAX_CIRCUIT_BYTES} bytes."
 
 
@@ -32,7 +33,18 @@ async def validate_task(body: SubmitTaskRequest) -> SubmitTaskRequest:
     return body
 
 
-@router.post("", status_code=202)
+@router.post(
+    "",
+    status_code=202,
+    responses={
+        400: {"model": ErrorResponse, "description": "Malformed body"},
+        413: {"model": ErrorResponse, "description": "Circuit larger than MAX_CIRCUIT_BYTES"},
+        503: {
+            "model": ErrorResponse,
+            "description": "Queue full, or the broker or database unavailable",
+        },
+    },
+)
 async def submit_task(
     body: Annotated[SubmitTaskRequest, Depends(validate_task)],
     task_store: TaskStoreDep,
@@ -47,7 +59,7 @@ async def submit_task(
         await task_store.delete_task(task_id)
         raise HTTPException(
             503,
-            SERVICE_BUSY_MESSAGE,
+            SERVICE_UNAVAILABLE_MESSAGE,
             headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
         ) from None
     await task_store.mark_published(task_id)
@@ -55,7 +67,13 @@ async def submit_task(
     return SubmitTaskResponse(task_id=task_id)
 
 
-@router.get("/{task_id}")
+@router.get(
+    "/{task_id}",
+    responses={
+        404: {"model": ErrorResponse, "description": "Task not found"},
+        503: {"model": ErrorResponse, "description": "Database unavailable"},
+    },
+)
 async def get_task(
     task_id: str, task_store: TaskStoreDep
 ) -> PendingTaskResponse | CompletedTaskResponse | FailedTaskResponse:

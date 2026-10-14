@@ -3,17 +3,22 @@
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from typing import Any
 
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.openapi.utils import get_openapi
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.exceptions import HTTPException
 
 from api.data.store import PostgresTaskStore
+from api.domain.abstractions import DatabaseUnavailable
 from api.presentation import health, tasks
 from api.presentation.dependencies import AppState
+from api.presentation.schemas import SERVICE_UNAVAILABLE_MESSAGE
+from api.settings import RETRY_AFTER_SECONDS
 from common.data.publisher import TaskPublisher
 from common.log import configure_logging
 
@@ -36,6 +41,33 @@ async def lifespan(app: FastAPI) -> AsyncIterator[AppState]:
 app = FastAPI(title="Quantum Circuit Execution", lifespan=lifespan)
 app.include_router(tasks.router)
 app.include_router(health.router)
+
+
+def _openapi() -> dict[str, Any]:
+    """The API docs, with the error responses this app adds to every route.
+
+    FastAPI documents a 422 on every route with parameters, but this API answers a malformed
+    request with 400 (`render_validation_error`), so the 422 is removed. Any route can answer
+    500 (`render_unexpected_error`), which no route declares itself, so it is added.
+    """
+    if app.openapi_schema is None:
+        schema = get_openapi(title=app.title, version=app.version, routes=app.routes)
+        internal_error = {
+            "description": "Unexpected server error",
+            "content": {"application/json": {"schema": {"$ref": _ERROR_RESPONSE_SCHEMA}}},
+        }
+        for operations in schema["paths"].values():
+            for operation in operations.values():
+                operation["responses"].pop("422", None)
+                operation["responses"]["500"] = internal_error
+        app.openapi_schema = schema
+    return app.openapi_schema
+
+
+# Defined by the routes' declared error responses (`api.presentation.schemas.ErrorResponse`).
+_ERROR_RESPONSE_SCHEMA = "#/components/schemas/ErrorResponse"
+
+app.openapi = _openapi  # type: ignore[method-assign]
 
 
 @app.exception_handler(HTTPException)
@@ -62,6 +94,21 @@ async def render_validation_error(request: Request, exc: RequestValidationError)
         f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()
     )
     return await render_error(request, HTTPException(400, message))
+
+
+@app.exception_handler(DatabaseUnavailable)
+async def render_database_unavailable(request: Request, exc: DatabaseUnavailable) -> JSONResponse:
+    """Answer 503 with `Retry-After` while Postgres is unreachable: the outage is temporary,
+    so the client should try again rather than treat it as a server fault."""
+    log.warning(
+        "database_unavailable", method=request.method, path=request.url.path, exc_info=exc
+    )
+    return await render_error(
+        request,
+        HTTPException(
+            503, SERVICE_UNAVAILABLE_MESSAGE, headers={"Retry-After": str(RETRY_AFTER_SECONDS)}
+        ),
+    )
 
 
 @app.middleware("http")

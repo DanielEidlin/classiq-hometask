@@ -2,6 +2,7 @@
 
 import uuid
 
+from api.domain.abstractions import DatabaseUnavailable
 from api.domain.outcomes import TaskOutcome
 
 
@@ -32,6 +33,19 @@ class FakeTaskStore:
 
     async def is_reachable(self) -> bool:
         return self.reachable
+
+
+class UnavailableTaskStore(FakeTaskStore):
+    """A store whose database can't be reached: every call fails as the real store does then."""
+
+    async def insert_task(self, task_id: uuid.UUID, circuit: str) -> None:
+        raise DatabaseUnavailable
+
+    async def fetch_outcome(self, task_id: uuid.UUID) -> TaskOutcome | None:
+        raise DatabaseUnavailable
+
+    async def is_reachable(self) -> bool:
+        return False
 
 
 class BrokenTaskStore(FakeTaskStore):
