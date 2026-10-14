@@ -5,7 +5,6 @@ import sys
 from common.tasks import ErrorCode
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
 from worker.runner import TIMEOUT_MESSAGE, SimulationLimits, classify_exit, run, run_in_child
-from worker.simulation import NO_MEASUREMENTS_MESSAGE
 
 LIMITS = SimulationLimits(shots=1024, max_memory_mb=1700, timeout_seconds=60)
 SHORT_TIMEOUT_SECONDS = 2
@@ -44,12 +43,11 @@ def test_invalid_qasm3_fails_with_the_parse_error() -> None:
     assert "'not_a_gate' is not defined" in failure.message
 
 
-def test_circuit_without_measurements_fails() -> None:
+def test_circuit_without_measurements_fails_with_the_simulator_message() -> None:
     failure = _failure('OPENQASM 3.0;\ninclude "stdgates.inc";\nqubit[2] q;\nh q[0];\n')
 
-    assert failure == SimulationFailed(
-        code=ErrorCode.INVALID_CIRCUIT, message=NO_MEASUREMENTS_MESSAGE
-    )
+    assert failure.code == ErrorCode.SIMULATION_ERROR
+    assert failure.message.startswith("QiskitError: No counts for experiment")
 
 
 def test_circuit_too_large_for_the_memory_budget_fails_with_the_simulator_message() -> None:
