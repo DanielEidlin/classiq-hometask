@@ -59,13 +59,6 @@ class ComposeStack:
         """Kill every replica of the service with SIGKILL, as a crash would, with no graceful shutdown."""
         compose("kill", service)
 
-    def execute_sql(self, statement: str) -> None:
-        compose(
-            "exec", "-T", "postgres",
-            "psql", "--username", "tasks", "--dbname", "tasks", "-v", "ON_ERROR_STOP=1",
-            "--command", statement,
-        )
-
     def restart(self, service: str) -> None:
         # `restart` returns once the container is running, not once it is healthy.
         compose("restart", service)

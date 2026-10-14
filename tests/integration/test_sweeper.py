@@ -1,11 +1,13 @@
 import uuid
+from datetime import timedelta
 
 import httpx
 import pytest
+import sqlalchemy as sa
 
 from api_client import poll_until_final
 from circuits import BELL_CIRCUIT
-from stack import ComposeStack
+from common.tasks import tasks
 
 pytestmark = pytest.mark.integration
 
@@ -14,16 +16,19 @@ SWEEP_GRACE_SECONDS = 30
 
 
 def test_task_stored_but_never_published_still_completes(
-    api: httpx.Client, compose_stack: ComposeStack
+    api: httpx.Client, db_engine: sa.Engine
 ) -> None:
     # As if the API crashed between storing the task and publishing it, longer ago than the
     # grace period.
     task_id = uuid.uuid4()
-    compose_stack.execute_sql(
-        "INSERT INTO tasks (id, circuit, published, created_at) "
-        f"VALUES ('{task_id}', $circuit${BELL_CIRCUIT}$circuit$, false, "
-        f"now() - interval '{2 * SWEEP_GRACE_SECONDS} seconds')"
+    statement = tasks.insert().values(
+        id=task_id,
+        circuit=BELL_CIRCUIT,
+        published=False,
+        created_at=sa.func.now() - timedelta(seconds=2 * SWEEP_GRACE_SECONDS),
     )
+    with db_engine.begin() as connection:
+        connection.execute(statement)
 
     final = poll_until_final(api, str(task_id))
 
