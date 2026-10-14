@@ -96,6 +96,32 @@ services:
       retries: 5
       start_period: 20s
 
+  sweeper:
+    build:
+      context: .
+      dockerfile: packages/sweeper/Dockerfile
+    environment:
+      <<: *app-environment
+      SWEEP_INTERVAL_SECONDS: ${SWEEP_INTERVAL_SECONDS:-10}
+      SWEEP_GRACE_SECONDS: ${SWEEP_GRACE_SECONDS:-30}
+      STALE_TASK_SECONDS: ${STALE_TASK_SECONDS:-600}
+      SWEEPER_HEALTHY_WITHIN_SECONDS: ${SWEEPER_HEALTHY_WITHIN_SECONDS:-60}
+    deploy:
+      replicas: 1
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "sweeper.health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
 volumes:
   postgres-data:
   rabbitmq-data:

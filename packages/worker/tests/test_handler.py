@@ -1,4 +1,4 @@
-"""The worker's task handler against the stack's Postgres, with the simulation replaced.
+"""The worker's task handler against a real Postgres, with the simulation replaced.
 
 Duplicate handling is tested here rather than end to end: arranging an overlapping
 redelivery through the queue would depend on timing, while calling the handler is
@@ -12,14 +12,13 @@ import pytest
 import sqlalchemy as sa
 from structlog.testing import capture_logs
 
-from circuits import BELL_CIRCUIT
 from common.tasks import ErrorCode, TaskStatus, tasks
 from worker.handler import WORKER_LOST_MESSAGE, TaskHandler
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
 
-pytestmark = pytest.mark.integration
-
 MAX_ATTEMPTS = 3
+# Never simulated: every test replaces the simulation.
+CIRCUIT = "OPENQASM 3.0;"
 FIRST_COUNTS = {"00": 1024}
 SECOND_COUNTS = {"11": 1024}
 
@@ -30,12 +29,10 @@ def _insert_task(
     attempts: int = 0,
     result: dict[str, int] | None = None,
 ) -> uuid.UUID:
-    # Marked published, so the stack's sweeper never hands it to the real workers.
     task_id = uuid.uuid4()
     statement = tasks.insert().values(
         id=task_id,
-        circuit=BELL_CIRCUIT,
-        published=True,
+        circuit=CIRCUIT,
         status=status,
         attempts=attempts,
         result=result,
