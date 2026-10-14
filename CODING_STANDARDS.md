@@ -4,7 +4,7 @@ Conventions for code in this repository, drawn from review. Tooling already enfo
 
 ## Names
 
-- Names are readable and specific: they say what the thing is or does, without abbreviations. `quantum_circuit`, not `qc`; `get_db_connection`, not `get_connection`; `ComposeStack`, not `Stack`.
+- Names are readable and specific: they say what the thing is or does, without abbreviations. `quantum_circuit`, not `qc`; `get_task_store`, not `get_store`; `ComposeStack`, not `Stack`.
 - Use the domain vocabulary in `CONTEXT.md` (circuit, task, counts, attempt).
 - When an external contract fixes a terse name (the API's `qc` field), keep it at the boundary only and map it to a readable name with an alias.
 - A library's own idioms stay as they are (SQLAlchemy's `table.c`).
@@ -14,12 +14,13 @@ Conventions for code in this repository, drawn from review. Tooling already enfo
 - No nested functions. Write a private module-level function (`_name`) and bind arguments with `functools.partial` where needed.
 - One module per FastAPI router (`api/tasks.py`, `api/health.py`). `api/main.py` only builds the app, registers routers and installs error handling.
 - The API's Pydantic models (request and response bodies, stored outcomes) live in `api/models.py`; router modules hold only routes and the code they call.
-- Each database statement lives in its own small function named after what it does (`_claim`, `_complete`, `_fetch_outcome`), returning a typed result. Write the query out in full inside it; pass several conditions to `.where(...)` rather than building `sa.and_(...)` in a separate variable.
+- Each service's database statements live in its `store.py`, behind the `TaskStore` protocol the rest of the service uses; `PostgresTaskStore` implements it. Each statement is its own small function named after what it does (`_start_attempt`, `_complete`, `_fetch_outcome`), returning a typed result. Write the query out in full inside it; pass several conditions to `.where(...)` rather than building `sa.and_(...)` in a separate variable.
 
 ## Dependencies and state
 
 - Code receives its collaborators; it doesn't reach for globals.
-  - In the API, routes declare FastAPI dependencies (`api/dependencies.py`), using the `Annotated[..., Depends(...)]` shorthands (`DbConnectionDep`, `PublisherDep`). Resources that need async setup and teardown are opened by the lifespan and yielded as lifespan state, typed by `AppState`; nothing writes to `app.state`.
+  - In the API, routes declare FastAPI dependencies (`api/dependencies.py`), using the `Annotated[..., Depends(...)]` shorthands (`TaskStoreDep`, `PublisherDep`). Resources that need async setup and teardown are opened by the lifespan and yielded as lifespan state, typed by `AppState`; nothing writes to `app.state`.
+  - Interfaces a service's code depends on are `Protocol`s in that service's `abstractions.py`, beside the exceptions and models they promise (`DatabaseUnavailable`, `StartedAttempt`).
   - Classes take their collaborators in the constructor, so tests can pass their own. A classmethod builds the production instance (`TaskPublisher.connect(url)`).
 - Module-level objects are fine when building them has no side effects (a SQLAlchemy `Table`, a router). Anything that opens connections or does I/O is created at startup or on first use, never at import. A connection pool that must not cross a `fork` is created lazily (`functools.cache`).
 
@@ -54,6 +55,7 @@ Conventions for code in this repository, drawn from review. Tooling already enfo
 - Assertions hold for every valid outcome. Where results are random, assert what is always true (a subset of keys, the total), and say so.
 - Expensive fixtures (the Compose stack, its HTTP client) are session-scoped.
 - Tests are synchronous unless a test needs concurrency. An async test can then sit beside the sync ones with its own client fixture.
+- Test doubles live in `tests/support/fakes/`, one module per faked collaborator (`api_task_store.py`). A fake answers with what the test arranges and keeps what was written through it; it doesn't imitate the database, whose behaviour is tested on the real store against Postgres.
 - To change a dependency of the API in-process, override it with `app.dependency_overrides` and use `TestClient` without its lifespan, so no database or broker is needed.
 - Fault-injection tests synchronise on observable state with a generous deadline, never on fixed sleeps, and restore the stack in a `finally` block.
 
