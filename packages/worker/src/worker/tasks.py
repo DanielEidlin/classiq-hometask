@@ -8,7 +8,7 @@ from celery.exceptions import Reject
 
 from common.task_queue import PROCESS_TASK_NAME
 from worker.app import app
-from worker.handler import RecordingAbandoned, TaskHandler
+from worker.handler import DatabaseUnavailable, TaskHandler
 
 
 # Built on first use: the engine's connection pool must not cross Celery's fork into its pool processes.
@@ -21,6 +21,6 @@ def _handler() -> TaskHandler:
 def process(task_id: str) -> None:
     try:
         _handler().handle(uuid.UUID(task_id))
-    except RecordingAbandoned:
+    except DatabaseUnavailable:
         # Unacknowledged and requeued, so the task runs again once the database is back.
-        raise Reject("the outcome could not be recorded", requeue=True) from None
+        raise Reject("the database is unavailable", requeue=True) from None

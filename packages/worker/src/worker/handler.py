@@ -6,9 +6,11 @@ A task may be delivered more than once: Celery acknowledges a message only after
 finishes, so RabbitMQ redelivers it when a worker dies. Every write therefore applies only
 while the task is pending, and the first outcome recorded wins.
 
-If the database can't take the outcome, the handler retries the write in place, so the worker
-takes no new tasks meanwhile. Once the outage outlasts the retry policy it gives up and raises
-`RecordingAbandoned`, for the message to be returned to the queue rather than acknowledged.
+If the database is unreachable, the handler retries the call in place, so the worker takes no
+new tasks meanwhile. Once the outage outlasts the retry policy it gives up and raises
+`DatabaseUnavailable`, for the message to be returned to the queue rather than acknowledged.
+A requeue after the claim committed has used up an attempt, so an outage that outlasts the
+policy MAX_ATTEMPTS times in a row fails the task as WORKER_LOST.
 """
 
 import functools
@@ -23,9 +25,10 @@ from pydantic import BaseModel
 
 from common.tasks import ErrorCode, TaskStatus, tasks
 from worker import runner
+from worker.database import DATABASE_UNAVAILABLE_ERRORS, create_db_engine
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
 from worker.retry import RetryPolicy, backoff_delays
-from worker.settings import DB_TIMEOUT_SECONDS, MAX_ATTEMPTS, RECORD_RETRY_POLICY, SIMULATION_LIMITS
+from worker.settings import DB_RETRY_POLICY, DB_TIMEOUT_SECONDS, MAX_ATTEMPTS, SIMULATION_LIMITS
 
 log = structlog.get_logger()
 
@@ -36,26 +39,8 @@ WORKER_LOST_MESSAGE = (
 Simulation = Callable[[str], SimulationOutcome]
 
 
-class RecordingAbandoned(Exception):
-    """The database stayed unreachable for the whole retry policy; the outcome wasn't recorded."""
-
-
-def create_db_engine(database_url: str, timeout_seconds: float) -> sa.Engine:
-    """An engine whose every database call fails within about `timeout_seconds` rather than hang."""
-    timeout_ms = int(timeout_seconds * 1000)
-    return sa.create_engine(
-        database_url,
-        pool_pre_ping=True,
-        pool_timeout=timeout_seconds,
-        connect_args={
-            # libpq takes whole seconds, and treats 0 as no timeout.
-            "connect_timeout": max(1, round(timeout_seconds)),
-            # statement_timeout bounds a slow query; tcp_user_timeout bounds a peer that
-            # stopped answering mid-query, which the server-side timeout can't see.
-            "options": f"-c statement_timeout={timeout_ms}",
-            "tcp_user_timeout": timeout_ms,
-        },
-    )
+class DatabaseUnavailable(Exception):
+    """The database stayed unreachable for the whole retry policy."""
 
 
 class ClaimedTask(BaseModel):
@@ -151,14 +136,14 @@ class TaskHandler:
         engine: sa.Engine,
         simulation: Simulation,
         max_attempts: int,
-        record_retry_policy: RetryPolicy,
+        db_retry_policy: RetryPolicy,
         sleep: Callable[[float], None] = time.sleep,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._engine = engine
         self._simulation = simulation
         self._max_attempts = max_attempts
-        self._record_retry_policy = record_retry_policy
+        self._db_retry_policy = db_retry_policy
         self._sleep = sleep
         self._clock = clock
 
@@ -168,45 +153,43 @@ class TaskHandler:
             create_db_engine(database_url, DB_TIMEOUT_SECONDS),
             functools.partial(runner.run, limits=SIMULATION_LIMITS),
             MAX_ATTEMPTS,
-            RECORD_RETRY_POLICY,
+            DB_RETRY_POLICY,
         )
 
-    def _record_with_retries(
+    def _with_retries[T](
         self,
         task_log: structlog.typing.FilteringBoundLogger,
-        task_id: uuid.UUID,
-        outcome: SimulationOutcome,
-    ) -> bool:
-        policy = self._record_retry_policy
+        operation: Callable[[sa.Connection], T],
+    ) -> T:
+        """Run `operation` in a transaction, retrying while the database is unreachable."""
+        policy = self._db_retry_policy
         deadline = self._clock() + policy.give_up_seconds
         delays = backoff_delays(policy.first_delay_seconds, policy.max_delay_seconds)
-        write_attempt = 0
+        failed_calls = 0
         while True:
-            write_attempt += 1
             try:
                 with self._engine.begin() as connection:
-                    return _record(connection, task_id, outcome)
-            except sa.exc.OperationalError:
-                task_log.error("outcome_write_failed", write_attempt=write_attempt, exc_info=True)
+                    return operation(connection)
+            except DATABASE_UNAVAILABLE_ERRORS:
+                failed_calls += 1
+                task_log.error("database_call_failed", failed_calls=failed_calls, exc_info=True)
             remaining = deadline - self._clock()
             if remaining <= 0:
                 task_log.error(
-                    "outcome_write_abandoned",
-                    write_attempts=write_attempt,
+                    "database_unavailable",
+                    failed_calls=failed_calls,
                     give_up_seconds=policy.give_up_seconds,
                 )
-                raise RecordingAbandoned
+                raise DatabaseUnavailable
             self._sleep(min(next(delays), remaining))
 
     def handle(self, task_id: uuid.UUID) -> None:
         task_log = log.bind(task_id=str(task_id))
 
-        with self._engine.begin() as connection:
-            claimed = _claim(connection, task_id)
+        claimed = self._with_retries(task_log, functools.partial(_claim, task_id=task_id))
         if claimed is None:
             # A separate read: the conditional claim can't tell a final task from a missing one.
-            with self._engine.connect() as connection:
-                status = _fetch_status(connection, task_id)
+            status = self._with_retries(task_log, functools.partial(_fetch_status, task_id=task_id))
             if status is None:
                 task_log.info("task_skipped", reason="not found")
             else:
@@ -223,7 +206,10 @@ class TaskHandler:
         else:
             outcome = self._simulation(claimed.circuit)
 
-        if self._record_with_retries(task_log, task_id, outcome):
+        recorded = self._with_retries(
+            task_log, functools.partial(_record, task_id=task_id, outcome=outcome)
+        )
+        if recorded:
             _log_recorded(task_log, outcome)
         else:
             task_log.info("duplicate_result_discarded")

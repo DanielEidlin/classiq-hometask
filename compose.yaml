@@ -27,7 +27,8 @@ services:
     environment:
       # How long a consumer may hold a delivered message unacknowledged before RabbitMQ closes
       # its channel and requeues the message, so a stuck worker can't hold a task forever.
-      # It must exceed TASK_TIMEOUT_SECONDS plus the worker's DB_OUTAGE_GIVE_UP_SECONDS.
+      # A worker that simulated for the full TASK_TIMEOUT_SECONDS and then waited out
+      # DB_OUTAGE_GIVE_UP_SECONDS can reach it first; the message is requeued either way.
       RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "-rabbit consumer_timeout ${CONSUMER_TIMEOUT_MS:-300000}"
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
