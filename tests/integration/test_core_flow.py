@@ -4,9 +4,13 @@ import httpx
 import pytest
 
 from stack import ComposeStack
-from api_client import BELL_CIRCUIT, SHOTS, poll_until_final
+from api_client import poll_until_final
+from circuits import BELL_CIRCUIT
 
 pytestmark = pytest.mark.integration
+
+# The worker's default shot count; compose.yaml doesn't override it.
+SHOTS = 1024
 
 
 def test_bell_circuit_is_pending_then_completed_with_counts(

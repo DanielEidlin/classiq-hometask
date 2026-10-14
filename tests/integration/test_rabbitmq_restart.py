@@ -2,7 +2,8 @@ import httpx
 import pytest
 
 from stack import ComposeStack
-from api_client import BELL_CIRCUIT, poll_until_final, submit_task, wait_until_healthy
+from api_client import poll_until_final, submit_task, wait_until_healthy
+from circuits import BELL_CIRCUIT
 
 pytestmark = [pytest.mark.integration, pytest.mark.resilience]
 
