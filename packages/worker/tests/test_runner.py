@@ -4,7 +4,13 @@ import sys
 
 from common.tasks import ErrorCode
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
-from worker.runner import TIMEOUT_MESSAGE, SimulationLimits, classify_exit, run, run_in_child
+from worker.runner import (
+    TIMEOUT_MESSAGE,
+    SimulationLimits,
+    SimulationRunner,
+    classify_exit,
+    run_in_child,
+)
 
 LIMITS = SimulationLimits(shots=1024, max_memory_mb=1700, timeout_seconds=60)
 SHORT_TIMEOUT_SECONDS = 2
@@ -21,7 +27,7 @@ c = measure q;
 
 
 def test_bell_circuit_returns_counts_over_00_and_11() -> None:
-    outcome = run(BELL_CIRCUIT, LIMITS)
+    outcome = SimulationRunner(LIMITS).run(BELL_CIRCUIT)
 
     assert isinstance(outcome, SimulationCompleted)
     # Subset, not equality: sampling can miss one of the two outcomes.
@@ -30,7 +36,7 @@ def test_bell_circuit_returns_counts_over_00_and_11() -> None:
 
 
 def _failure(circuit: str, limits: SimulationLimits = LIMITS) -> SimulationFailed:
-    outcome = run(circuit, limits)
+    outcome = SimulationRunner(limits).run(circuit)
     assert isinstance(outcome, SimulationFailed), outcome
     return outcome
 

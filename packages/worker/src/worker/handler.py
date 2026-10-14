@@ -5,21 +5,27 @@ It has no Celery dependency; `worker.tasks` binds it to the queue.
 A task may be delivered more than once: Celery acknowledges a message only after the task
 finishes, so RabbitMQ redelivers it when a worker dies. Every write therefore applies only
 while the task is pending, and the first outcome recorded wins.
+
+If the database is unreachable, the handler retries the call in place, so the worker takes no
+new tasks meanwhile. Once the outage outlasts the retry policy it gives up and raises
+`DatabaseUnavailable`, for the message to be returned to the queue rather than acknowledged.
+A requeue after the claim committed has used up an attempt, so an outage that outlasts the
+policy MAX_ATTEMPTS times in a row fails the task as WORKER_LOST.
 """
 
 import functools
 import uuid
 from collections.abc import Callable
-from typing import Self, assert_never
+from typing import assert_never, cast
 
 import sqlalchemy as sa
 import structlog
+import tenacity
 from pydantic import BaseModel
 
 from common.tasks import ErrorCode, TaskStatus, tasks
-from worker import runner
+from worker.abstractions import CircuitRunner
 from worker.outcomes import SimulationCompleted, SimulationFailed, SimulationOutcome
-from worker.settings import MAX_ATTEMPTS, SIMULATION_LIMITS
 
 log = structlog.get_logger()
 
@@ -27,7 +33,9 @@ WORKER_LOST_MESSAGE = (
     "The worker running the task was lost {max_attempts} times, so it was not run again."
 )
 
-Simulation = Callable[[str], SimulationOutcome]
+
+class DatabaseUnavailable(Exception):
+    """The database stayed unreachable for the whole retry policy."""
 
 
 class ClaimedTask(BaseModel):
@@ -117,26 +125,50 @@ def _log_recorded(task_log: structlog.typing.FilteringBoundLogger, outcome: Simu
             assert_never(outcome)
 
 
-class TaskHandler:
-    def __init__(self, engine: sa.Engine, simulation: Simulation, max_attempts: int) -> None:
-        self._engine = engine
-        self._simulation = simulation
-        self._max_attempts = max_attempts
+def _log_failed_call(
+    task_log: structlog.typing.FilteringBoundLogger, retry_state: tenacity.RetryCallState
+) -> None:
+    error = retry_state.outcome.exception() if retry_state.outcome is not None else None
+    task_log.error("database_call_failed", failed_calls=retry_state.attempt_number, exc_info=error)
 
-    @classmethod
-    def connect(cls, database_url: str) -> Self:
-        engine = sa.create_engine(database_url, pool_pre_ping=True)
-        return cls(engine, functools.partial(runner.run, limits=SIMULATION_LIMITS), MAX_ATTEMPTS)
+
+class TaskHandler:
+    def __init__(
+        self,
+        engine: sa.Engine,
+        circuit_runner: CircuitRunner,
+        max_attempts: int,
+        retrying: tenacity.Retrying,
+    ) -> None:
+        self._engine = engine
+        self._circuit_runner = circuit_runner
+        self._max_attempts = max_attempts
+        self._retrying = retrying
+
+    def _in_transaction[T](self, operation: Callable[[sa.Connection], T]) -> T:
+        with self._engine.begin() as connection:
+            return operation(connection)
+
+    def _with_retries[T](
+        self,
+        task_log: structlog.typing.FilteringBoundLogger,
+        operation: Callable[[sa.Connection], T],
+    ) -> T:
+        """Run `operation` in a transaction, retrying while the database is unreachable."""
+        retrying = self._retrying.copy(after=functools.partial(_log_failed_call, task_log))
+        try:
+            return cast(T, retrying(self._in_transaction, operation))
+        except tenacity.RetryError as error:
+            task_log.error("database_unavailable", failed_calls=error.last_attempt.attempt_number)
+            raise DatabaseUnavailable from None
 
     def handle(self, task_id: uuid.UUID) -> None:
         task_log = log.bind(task_id=str(task_id))
 
-        with self._engine.begin() as connection:
-            claimed = _claim(connection, task_id)
+        claimed = self._with_retries(task_log, functools.partial(_claim, task_id=task_id))
         if claimed is None:
             # A separate read: the conditional claim can't tell a final task from a missing one.
-            with self._engine.connect() as connection:
-                status = _fetch_status(connection, task_id)
+            status = self._with_retries(task_log, functools.partial(_fetch_status, task_id=task_id))
             if status is None:
                 task_log.info("task_skipped", reason="not found")
             else:
@@ -151,10 +183,11 @@ class TaskHandler:
                 message=WORKER_LOST_MESSAGE.format(max_attempts=self._max_attempts),
             )
         else:
-            outcome = self._simulation(claimed.circuit)
+            outcome = self._circuit_runner.run(claimed.circuit)
 
-        with self._engine.begin() as connection:
-            recorded = _record(connection, task_id, outcome)
+        recorded = self._with_retries(
+            task_log, functools.partial(_record, task_id=task_id, outcome=outcome)
+        )
         if recorded:
             _log_recorded(task_log, outcome)
         else:

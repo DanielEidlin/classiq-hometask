@@ -1,4 +1,4 @@
-"""The worker's simulation limits and attempt cap, read from the environment."""
+"""The worker's simulation limits, attempt cap and database timings, read from the environment."""
 
 import os
 
@@ -12,3 +12,12 @@ SIMULATION_LIMITS = SimulationLimits(
 
 # Deliveries of a task, each ended by a lost worker, before it is failed with WORKER_LOST.
 MAX_ATTEMPTS = int(os.environ.get("MAX_ATTEMPTS", "3"))
+
+# Every database call the worker makes fails after this long instead of hanging.
+DB_TIMEOUT_SECONDS = float(os.environ.get("DB_TIMEOUT_SECONDS", "10"))
+
+# Retrying a database call while the database is unreachable. Giving up should come before
+# RabbitMQ's consumer_timeout, which counts from delivery and so includes the simulation.
+DB_RETRY_FIRST_DELAY_SECONDS = float(os.environ.get("DB_RETRY_FIRST_DELAY_SECONDS", "1"))
+DB_RETRY_MAX_DELAY_SECONDS = float(os.environ.get("DB_RETRY_MAX_DELAY_SECONDS", "30"))
+DB_OUTAGE_GIVE_UP_SECONDS = float(os.environ.get("DB_OUTAGE_GIVE_UP_SECONDS", "240"))

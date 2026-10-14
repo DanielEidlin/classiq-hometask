@@ -10,6 +10,7 @@ dependencies = [
     "qiskit-aer==0.17.2",
     "qiskit-qasm3-import==0.6.0",
     "billiard>=4.2",
+    "tenacity>=9.1",
 ]
 
 [tool.uv.sources]
