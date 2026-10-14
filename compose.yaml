@@ -42,7 +42,9 @@ services:
     build:
       context: .
       dockerfile: packages/api/Dockerfile
-    environment: *app-environment
+    environment:
+      <<: *app-environment
+      MAX_CIRCUIT_BYTES: ${MAX_CIRCUIT_BYTES:-65536}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:

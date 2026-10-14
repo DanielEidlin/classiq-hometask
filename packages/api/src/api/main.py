@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response
 from sqlalchemy.ext.asyncio import create_async_engine
 from starlette.exceptions import HTTPException
@@ -49,6 +50,15 @@ async def render_error(request: Request, exc: HTTPException) -> JSONResponse:
         content={"status": "error", "message": exc.detail},
         headers=exc.headers,
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def render_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Answer a malformed request with 400 in the error shape, instead of FastAPI's 422."""
+    message = "; ".join(
+        f"{'.'.join(str(part) for part in error['loc'])}: {error['msg']}" for error in exc.errors()
+    )
+    return await render_error(request, HTTPException(400, message))
 
 
 @app.middleware("http")
